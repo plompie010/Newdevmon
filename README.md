@@ -1,123 +1,105 @@
-# Newdevmon
+# newdevmon
 
-Newdevmon stuurt je een e-mail zodra een **nieuw apparaat** verbinding maakt met je netwerk, zowel op het hoofdnetwerk als op de gastnetwerken. Het is een script voor routers met [Asuswrt-Merlin](https://www.asuswrt-merlin.net/) en draait vanuit het amtm-menu, met een eigen menu in je SSH-sessie.
+Emails you when a new device connects to your main or guest network.
+Built for **Asuswrt-Merlin** routers (developed on an ASUS RT-BE86U) and meant to be run from **amtm** as a personal script.
 
-Ontwikkeld en getest op een ASUS RT-BE86U.
+## What it does
 
-## Wat het doet
+- Checks DHCP leases and the ARP table of all LAN bridges every minute (configurable): `br0` is the main network, `br1`/`br2`/... are guest networks.
+- A device is "new" when its MAC address has never been seen before. The first run reports everything; use "Mark all connected devices as known" to start silently.
+- All new devices found in one check are reported in a single email.
+- Uses the email settings you already configured in amtm (`amtm > em`). No extra credentials.
+- Shows names, vendor, band, signal strength and AiMesh node from the Asus client lists when available.
+- Checks GitHub once a day for a newer version. Updates are only installed from the menu, after confirmation, with backup and rollback.
 
-- Controleert elke minuut (instelbaar) alle LAN-bridges: `br0` is het hoofdnetwerk, `br1`, `br2`, enzovoort zijn gastnetwerken.
-- Een apparaat telt als **nieuw** zolang het MAC-adres niet in de lijst met bekende apparaten staat.
-- Stuurt één e-mail per controle met alle nieuwe apparaten, gesorteerd per netwerk: naam, MAC-adres, IP-adres, netwerk en tijdstip.
-- Gebruikt de e-mailinstellingen die je al in amtm hebt ingesteld (`amtm` > `em`). Er is geen apart account of wachtwoord nodig.
-- Herkent privé/willekeurige MAC-adressen (iPhone, Android, Windows) en markeert die in de mail.
-- Toont bovenaan het menu een dashboard: aantal apparaten per netwerk (bekend en online), het nieuwste apparaat en wanneer de laatste controle draaide.
-- Bewaart per apparaat wanneer het voor het eerst en voor het laatst gezien is.
-- Controleert dagelijks of er een nieuwere versie op GitHub staat en installeert die alleen na jouw bevestiging.
+## Requirements
 
-## Vereisten
+- Asuswrt-Merlin with amtm, and amtm email configured and working
+- JFFS enabled (for the script, the known-device list and cron persistence)
 
-- Een ASUS-router met Asuswrt-Merlin en amtm.
-- SSH aan, en **Enable JFFS custom scripts and configs** aan onder Administration > System.
-- E-mail ingesteld in amtm. Controleer dit met `amtm` > `em` > optie 11 (testmail).
+## Install
 
-## Installatie
-
-Log in op de router via SSH en voer uit:
+SSH into the router and run:
 
 ```sh
-curl -fsSL -o /jffs/scripts/newdevmon.sh https://raw.githubusercontent.com/plompie010/Newdevmon/main/newdevmon.sh
+curl -fsSL https://raw.githubusercontent.com/plompie010/Newdevmon/main/newdevmon.sh -o /jffs/scripts/newdevmon.sh
 chmod 755 /jffs/scripts/newdevmon.sh
-sh /jffs/scripts/newdevmon.sh
 ```
 
-In het menu:
+Then start `amtm`, press `p`, and pick `newdevmon.sh`. In the menu choose:
 
-1. Kies `5` om een testmail te versturen.
-2. Kies `i` om de cronjob en de opstarthook te installeren.
+1. `t` to send a test email
+2. `m` to mark the devices currently connected as known (optional)
+3. `i` to install the cron jobs and the startup hook
 
-Wil je het script ook in amtm zien? Open in amtm de optie `p` (personal script settings) en voeg `/jffs/scripts/newdevmon.sh` toe.
+## Menu
 
-Bij de eerste controle worden **alle apparaten die nu verbonden zijn** als nieuw gemeld. Wil je dat niet, kies dan eerst `6` ("Alle nu verbonden apparaten als bekend markeren").
+| Key | Action |
+|-----|--------|
+| `c` | **C**heck for new devices now |
+| `v` | **V**iew connected devices (with band and signal) |
+| `d` | Known **d**evices and details |
+| `f` | **F**orget a device (it will be reported again) |
+| `m` | **M**ark all connected devices as known |
+| `l` | Read the **l**og |
+| `t` | Send a **t**est email |
+| `s` | **S**ettings (check interval, email on new version) |
+| `u` | **U**pdate: check and install a new version |
+| `p` | Restore the **p**revious version |
+| `i` | **I**nstall cron jobs and startup hook |
+| `r` | **R**emove cron jobs and startup hook |
+| `e` | **E**xit |
 
-## Het menu
+Settings submenu: `i` check interval, `n` **n**otify by email about new versions, `b` back.
 
-Start het script zonder argumenten in een SSH-sessie (of via amtm):
+Command line: `newdevmon.sh [menu|run|cron|install|uninstall|baseline|test|list|detail NR|MAC|log|forget MAC|update-check|update [-y]|rollback]`
 
-| Optie | Doet |
-|---|---|
-| `1` | Controle nu uitvoeren |
-| `2` | Verbonden apparaten tonen, per netwerk (nieuwe apparaten gemarkeerd) |
-| `3` | Bekende apparaten tonen, per netwerk, met online-status en wanneer ze voor het laatst gezien zijn |
-| `4` | Log lezen |
-| `5` | Testmail versturen |
-| `6` | Alle nu verbonden apparaten als bekend markeren |
-| `7` | Een apparaat vergeten, zodat het opnieuw gemeld wordt |
-| `8` | Controle-interval wijzigen (1 tot 59 minuten) |
-| `9` | Controleren op updates en installeren |
-| `g` | Mail bij nieuwe versie aan of uit |
-| `r` | Vorige versie terugzetten |
-| `i` | Cronjob en opstarthook installeren |
-| `u` | Cronjob en opstarthook verwijderen |
-| `e` | Afsluiten |
+## How it works
 
-Er is ook een opdrachtregel voor gebruik in scripts:
+- Cron runs `newdevmon.sh run` every `INTERVAL` minutes. A `services-start` hook restores the cron jobs after a reboot.
+- Last-seen times are kept in RAM (`/tmp`) and written to flash at most once an hour, and only when something changed, to limit flash wear.
+- "Online" comes from the Asus client list (`/jffs/nmp_cl_json.js`). Without it, everything in the leases/ARP table counts as seen.
+- Band, signal and node come from `/tmp/clientlist.json`. If that file is missing or has a different layout, those fields are simply omitted.
+- Devices with a private/random MAC address (iPhone, Android, Windows) can appear as new after a reset or per network.
 
-```sh
-newdevmon.sh [menu|run|cron|install|uninstall|baseline|test|list|log|forget MAC|update-check|update [-y]|rollback]
-```
+## Limitations
 
-## Hoe het werkt
-
-Het script leest de DHCP-leases (`/var/lib/misc/dnsmasq.leases`) en de ARP-tabel (`/proc/net/arp`) en voegt die samen op MAC-adres. Het netwerk volgt uit de bridge van het apparaat. Bekende apparaten staan in `/jffs/addons/newdevmon/known_devices.txt`; instellingen en log staan in dezelfde map.
-
-Mislukt het versturen van de mail, dan blijven de apparaten "nieuw" en probeert het script het bij de volgende controle opnieuw.
-
-## Laatst gezien en online
-
-De status "online" komt uit de clientlijst van Asus zelf (`/jffs/nmp_cl_json.js`, dezelfde bron als het netwerkoverzicht in de router). De leases en de ARP-tabel zijn hiervoor niet betrouwbaar, omdat daar ook apparaten in blijven staan die al weg zijn. Ontbreekt het Asus-bestand, dan telt alles in de leases en de ARP-tabel als gezien, en is de status minder nauwkeurig.
-
-Het laatst-gezien-tijdstip wordt bijgehouden in het geheugen (`/tmp`) en één keer per uur naar `/jffs/addons/newdevmon/known_devices.txt` geschreven, alleen als er iets veranderd is. Zo wordt de flash van de router niet elke minuut beschreven. Na een herstart van de router blijft dus het laatste uurlijkse tijdstip bewaard.
-
-## Beperkingen
-
-- **Willekeurige MAC-adressen.** Telefoons gebruiken per netwerk een privé-adres. Dat blijft meestal gelijk, maar verandert na "netwerk vergeten" of een reset. Je krijgt dan een melding voor wat eigenlijk een bekend apparaat is.
-- **Korte verbindingen.** Een apparaat dat korter dan een controle-interval verbonden is, zonder DHCP-lease, kan gemist worden.
-- **Naam van het netwerk.** Gastnetwerken heten "Gastnetwerk (brX)". Extra netwerken uit Guest Network Pro krijgen dezelfde benaming.
+- Detection is based on DHCP/ARP, so devices with a static IP that never talk to the router may be missed.
+- The meaning of some Asus fields (`wireless`, `mlo`, band suffixes such as `_1`) is inferred and may differ per firmware.
 
 ## Updates
 
-Het script controleert elke dag om 05:23 of er in deze repo een hogere `VERSION` staat. Is dat zo, dan zie je dat in de kop van het menu en, als je dat aanzet (`g`), ook in een e-mail. Installeren gaat alleen na bevestiging via optie `9`.
+The repository is fixed in the script: `plompie010/Newdevmon` (branch `main`, file `newdevmon.sh`). A daily check sets an "update available" notice in the menu header, optionally with an email (Settings > `n`). Press `u` to install; the old version is backed up (3 kept) and can be restored with `p`.
 
-Voor het vervangen controleert het script dat het gedownloade bestand een shellscript is, dat het bij Newdevmon hoort, dat de syntax klopt en dat er een versienummer in staat. Vóór elke update maakt het een backup. De laatste drie bewaart het in `/jffs/addons/newdevmon/backup/`. Met `r` zet je de vorige versie terug.
+## Uninstall
 
-De update-bron (deze repo) staat vast in het script en is niet instelbaar.
+Press `r` in the menu, then delete `/jffs/scripts/newdevmon.sh` and `/jffs/addons/newdevmon`.
 
-## Verwijderen
+## Troubleshooting
 
-1. Kies in het menu `u` om de cronjobs en de opstarthook te verwijderen.
-2. Verwijder eventueel de regel in amtm (`p`).
-3. Verwijder de bestanden:
+- **No email**: check amtm's email test first; then use `t`. Read the log with `l`.
+- **Everything shows as "Unknown network"**: the router could not map the IP to a bridge; run from the router itself, not a copy elsewhere.
+- **Update says latest version**: the `VERSION` in the repository must be higher than the installed one.
 
-```sh
-rm /jffs/scripts/newdevmon.sh
-rm -r /jffs/addons/newdevmon
-```
+## Changelog
 
-## Problemen oplossen
+### 0.1.3
+- Added band, signal, vendor, Asus name, MLO and AiMesh node (from Asus client lists)
+- Asus device names are preferred over DHCP host names
+- Everything translated to English (script, mails, README)
+- Settings moved to a submenu
+- Menu is a single column with mnemonic keys (`u` update, `r` remove, ...)
 
-- **Testmail mislukt.** Controleer eerst of de testmail in amtm zelf werkt (`amtm` > `em` > 11). Het script gebruikt dezelfde instellingen. Zie anders het log (optie `4`).
-- **Er komt geen melding.** Kijk bij optie `2` of het apparaat in de lijst staat, en bij optie `3` of het al als bekend is opgeslagen.
-- **Cronjob verdwenen na een herstart.** Draai optie `i` opnieuw. Dit zet de regel in `/jffs/scripts/services-start`.
+### 0.1.2
+- Device detail screen with forget action
 
-## Wijzigingen
+### 0.1.1
+- Dashboard, colours, first/last seen, online status
 
-- **0.1.1**: dashboard bovenaan het menu, kleur in het menu en de overzichten, twee kolommen in het menu, en eerst en laatst gezien per apparaat met online-status.
-- **0.1**: eerste versie.
+### 0.1
+- Initial version: new-device mails, menu, GitHub update check
 
 
-## Licentie
+## License
 
-Newdevmon is vrije software onder de **GNU General Public License, versie 3 of (naar keuze) een latere versie**. Zie het bestand [LICENSE](LICENSE).
-
-Het script wordt verspreid zonder enige garantie. Gebruik het op eigen risico.
+GPL-3.0-or-later. See `LICENSE`.
