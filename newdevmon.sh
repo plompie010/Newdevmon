@@ -35,7 +35,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 ###############################################################################
 
-VERSION="0.1.10"
+VERSION="0.1.11"
 SCRIPT_NAME="newdevmon"
 SCRIPT_PATH="${NEWDEVMON_SCRIPT_PATH:-/jffs/scripts/newdevmon.sh}"
 DATA_DIR="${NEWDEVMON_DIR:-/jffs/addons/newdevmon}"
@@ -227,6 +227,15 @@ link_info() {
                 print m "|" nd[best] "|" bnd[best] "|" rssi[best] "|" ip[best]
             }
         }'
+}
+
+# node_labels: mac|label for the router and the AiMesh nodes (lower case MACs).
+node_labels() {
+    for v in lan_hwaddr et0macaddr label_mac; do
+        m="$(nvram get "$v" 2>/dev/null | tr 'A-F' 'a-f')"
+        [ -n "$m" ] && echo "$m|Router"
+    done
+    nmp_info 2>/dev/null | awk -F'|' '$2 != "" { print $1 "|" $2 }'
 }
 
 # Devices currently visible, one line per device: mac|ip|name|interface
@@ -620,9 +629,11 @@ cmd_list() {
     # Grouped by network (main network first), by IP address within a network.
     # The number (#) stays the line number in the file.
     link_info 2>/dev/null > "$TMPBASE.link" || : > "$TMPBASE.link"
+    node_labels > "$TMPBASE.nodes"
     joined_known | sort -t'|' -k1,1n -k2,2 -k3,3 | awk -F'|' \
         -v now="$(date +%s)" -v G="$C_G" -v D="$C_D" -v B="$C_B" -v X="$C_X" "$AWK_FN"'
-        FILENAME == ARGV[1] { lk[$1] = bandshort($3) ($4 != "" ? " " $4 : ""); next }
+        FILENAME == ARGV[1] { lk[$1] = bandshort($3) ($4 != "" ? " " $4 : ""); nk[$1] = $2; next }
+        FILENAME == ARGV[2] { if (!($1 in nl)) nl[$1] = $2; next }
         {
             n++; L[n] = $0
             lab = $9; tot[lab]++
@@ -636,17 +647,21 @@ cmd_list() {
                 if (lab != prev) {
                     if (i > 1) print ""
                     printf "%s== %s ==%s  %d devices, %d online\n", B, lab, X, tot[lab], on[lab] + 0
-                    printf "%s%-3s %-16s %-15s %-17s %-9s %-10s %s%s\n", D, "#", "Name", "IP", "MAC", "Link", "First", "Last seen", X
+                    printf "%s%-3s %-16s %-15s %-9s %-12s %-10s %s%s\n", D, "#", "Name", "IP", "Link", "Node", "First", "Last seen", X
                     prev = lab
                 }
                 if (f[11] == 1) last = G "online" X
                 else if (f[10] + 0 <= 0) last = "never online"
                 else last = ago(f[10], now)
                 lt = (f[11] == 1 && (f[5] in lk)) ? lk[f[5]] : "-"
-                printf "%-3d %-16s %-15s %-17s %-9s %-10s %s\n", f[4], trunc(f[8], 16), f[7], f[5], lt, substr(f[6], 1, 10), last
+                nd = "-"
+                if (f[11] == 1 && (f[5] in nk) && nk[f[5]] != "") {
+                    nd = (nk[f[5]] in nl) ? nl[nk[f[5]]] : "node " substr(nk[f[5]], 13)
+                }
+                printf "%-3d %-16s %-15s %-9s %-12s %-10s %s\n", f[4], trunc(f[8], 16), f[7], lt, trunc(nd, 12), substr(f[6], 1, 10), last
             }
-        }' "$TMPBASE.link" -
-    rm -f "$TMPBASE.link"
+        }' "$TMPBASE.link" "$TMPBASE.nodes" -
+    rm -f "$TMPBASE.link" "$TMPBASE.nodes"
 }
 
 # resolve_device NR_OR_MAC: returns the MAC address for a number from the list (or the MAC itself).
