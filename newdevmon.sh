@@ -35,7 +35,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 ###############################################################################
 
-VERSION="0.1.13"
+VERSION="0.1.14"
 SCRIPT_NAME="newdevmon"
 SCRIPT_PATH="${NEWDEVMON_SCRIPT_PATH:-/jffs/scripts/newdevmon.sh}"
 DATA_DIR="${NEWDEVMON_DIR:-/jffs/addons/newdevmon}"
@@ -1154,7 +1154,7 @@ menu_device_detail() {
     cmd_detail "$1" || { pause_enter; return; }
     mac="$(resolve_device "$1")"
     echo
-    printf '  f) Forget this device (report it again)    Enter) back: '
+    printf '  f) Forget this device (report it again)    Enter) Back: '
     read -r act || return
     case "$act" in
         f|F)
@@ -1226,7 +1226,7 @@ menu_settings() {
         mi p "Restore the previous version"
         mi i "Install cron jobs and startup hook"
         mi r "Remove cron jobs and startup hook"
-        mi b "Back"
+        printf '  Enter) Back\n'
         echo
         printf '  Choice: '
         read -r sc || return
