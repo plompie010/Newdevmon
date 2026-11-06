@@ -74,6 +74,9 @@ Open Settings (`s`), press `r`, then delete `/jffs/scripts/newdevmon.sh` and `/j
 
 ## Changelog
 
+### 0.1.16
+- Exit splash screen ("Thanks for using New Device Monitor") instead of an empty screen
+
 ### 0.1.15
 - New ASCII header (name, version, router model, repository)
 - A clear bar is printed before every new screen, so it is easy to find when the terminal keeps scrolling
