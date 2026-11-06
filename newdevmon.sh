@@ -35,7 +35,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 ###############################################################################
 
-VERSION="0.1.18"
+VERSION="0.1.19"
 SCRIPT_NAME="newdevmon"
 SCRIPT_PATH="${NEWDEVMON_SCRIPT_PATH:-/jffs/scripts/newdevmon.sh}"
 DATA_DIR="${NEWDEVMON_DIR:-/jffs/addons/newdevmon}"
@@ -180,7 +180,12 @@ nmp_info() {
 # mac|node_mac|band|rssi|ip   (band: 2G_1, 5G_1, wired_mac, ...)
 link_info() {
     [ -r "$CLIENTLIST_FILE" ] || return 1
-    tr -d '\r\n' < "$CLIENTLIST_FILE" | awk -v all="$1" '
+    rmacs=""
+    for v in lan_hwaddr et0macaddr label_mac; do
+        rmacs="$rmacs $(nvram get "$v" 2>/dev/null | tr 'A-F' 'a-f')"
+    done
+    tr -d '\r\n' < "$CLIENTLIST_FILE" | awk -v all="$1" -v routers="$rmacs" '
+        BEGIN { nr = split(routers, ra, " "); for (i = 1; i <= nr; i++) isr[ra[i]] = 1 }
         function leaf(k, v,   mac, p, kk) {
             if (depth < 3 || (k != "ip" && k != "rssi")) return
             mac = tolower(stack[depth])
@@ -224,7 +229,7 @@ link_info() {
                 for (j = 1; j <= np[m]; j++) {
                     kk = m SUBSEP pl[m, j]
                     if (all == "all") print m "|" nd[kk] "|" bnd[kk] "|" rssi[kk] "|" ip[kk]
-                    sc = ((rssi[kk] != "" && rssi[kk] != "0") ? 4 : 0) + ((bnd[kk] !~ /^wired/) ? 2 : 0)
+                    sc = ((rssi[kk] != "" && rssi[kk] != "0") ? 4 : 0) + ((bnd[kk] !~ /^wired/) ? 2 : 0) + ((nd[kk] in isr) ? 0 : 1)
                     if (sc > bs) { bs = sc; best = kk }
                 }
                 if (all != "all") print m "|" nd[best] "|" bnd[best] "|" rssi[best] "|" ip[best]
