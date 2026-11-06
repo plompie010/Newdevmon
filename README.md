@@ -37,13 +37,13 @@ Then start `amtm`, press `p`, and pick `newdevmon.sh`. In the menu choose:
 | Key | Action |
 |-----|--------|
 | `1` | Check for new devices now |
-| `2` | Devices: list with band and signal, details per device, forget a device |
+| `2` | Devices: list with band, signal and node; check now, details per device, forget a device |
 | `s` | **S**ettings and maintenance (see below) |
 | `e` | **E**xit |
 
 Settings submenu: `f` check **f**requency, `n` **n**otify by email about new versions, `m` **m**ark all connected devices as known (no email is sent), `l` read the **l**og, `t` send a **t**est email, `u` **u**pdate, `p` restore the **p**revious version, `i` **i**nstall cron jobs and startup hook, `r` **r**emove them. Press Enter to go back.
 
-Command line: `newdevmon.sh [menu|run|cron|install|uninstall|baseline|test|list|detail NR|MAC|log|forget MAC|update-check|update [-y]|rollback]`
+Command line: `newdevmon.sh [menu|run|cron|install|uninstall|baseline|test|list|detail NR|MAC|debug NR|MAC|log|forget MAC|update-check|update [-y]|rollback]`
 
 ## How it works
 
@@ -56,6 +56,7 @@ Command line: `newdevmon.sh [menu|run|cron|install|uninstall|baseline|test|list|
 ## Limitations
 
 - Detection is based on DHCP/ARP, so devices with a static IP that never talk to the router may be missed.
+- Behind an AiMesh node the router often cannot tell Wi-Fi from wired; those devices show `wired?`.
 - The meaning of some Asus fields (`wireless`, `mlo`, band suffixes such as `_1`) is inferred and may differ per firmware.
 
 ## Updates
@@ -73,6 +74,18 @@ Open Settings (`s`), press `r`, then delete `/jffs/scripts/newdevmon.sh` and `/j
 - **Update says latest version**: the `VERSION` in the repository must be higher than the installed one.
 
 ## Changelog
+
+### 0.1.21
+- Devices screen: `c` checks for new devices and refreshes the list
+
+### 0.1.20
+- Link shows `wired?` for devices behind an AiMesh node that are only listed as wired: nodes often do not report Wi-Fi clients (for example sleeping cameras), so the router cannot tell Wi-Fi from wired. A plain `wired` now only appears for devices on the router itself
+
+### 0.1.19
+- Link/Node: when a device is listed under both the router and an AiMesh node with the same connection type, the node is chosen (the router only sees it through the backhaul)
+
+### 0.1.18
+- New `debug NR|MAC` command that prints the raw Asus data about one device, to diagnose wrong Link/Node information
 
 ### 0.1.17
 - Fixed the banner on busybox awk (no `%*s` support)
