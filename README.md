@@ -41,7 +41,7 @@ Then start `amtm`, press `p`, and pick `newdevmon.sh`. In the menu choose:
 | `s` | **S**ettings and maintenance (see below) |
 | `e` | **E**xit |
 
-Settings submenu: `f` check **f**requency, `n` **n**otify by email about new versions, `m` **m**ark all connected devices as known (no email is sent), `l` read the **l**og, `t` send a **t**est email, `u` **u**pdate, `p` restore the **p**revious version, `i` **i**nstall cron jobs and startup hook, `r` **r**emove them, `b` back.
+Settings submenu: `f` check **f**requency, `n` **n**otify by email about new versions, `m` **m**ark all connected devices as known (no email is sent), `l` read the **l**og, `t` send a **t**est email, `u` **u**pdate, `p` restore the **p**revious version, `i` **i**nstall cron jobs and startup hook, `r` **r**emove them. Press Enter to go back.
 
 Command line: `newdevmon.sh [menu|run|cron|install|uninstall|baseline|test|list|detail NR|MAC|log|forget MAC|update-check|update [-y]|rollback]`
 
@@ -73,6 +73,13 @@ Open Settings (`s`), press `r`, then delete `/jffs/scripts/newdevmon.sh` and `/j
 - **Update says latest version**: the `VERSION` in the repository must be higher than the installed one.
 
 ## Changelog
+
+### 0.1.15
+- New ASCII header (name, version, router model, repository)
+- A clear bar is printed before every new screen, so it is easy to find when the terminal keeps scrolling
+
+### 0.1.14
+- Enter goes back everywhere (the Settings menu no longer uses `b`)
 
 ### 0.1.13
 - After a failed email the script waits 30 minutes before trying again (no more retry every minute); a manual check (menu 1) ignores the pause and the dashboard shows the pause
