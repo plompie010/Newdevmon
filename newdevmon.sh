@@ -19,6 +19,7 @@
 # see the new version as newer.
 #
 # Copyright (C) 2026 plompie010
+# This code was written with the help of Claude AI (Anthropic).
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -34,7 +35,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 ###############################################################################
 
-VERSION="0.1.5"
+VERSION="0.1.8"
 SCRIPT_NAME="newdevmon"
 SCRIPT_PATH="${NEWDEVMON_SCRIPT_PATH:-/jffs/scripts/newdevmon.sh}"
 DATA_DIR="${NEWDEVMON_DIR:-/jffs/addons/newdevmon}"
@@ -1175,6 +1176,7 @@ menu_settings() {
         if [ "$UPDATE_MAIL" = "1" ]; then um="on"; else um="off"; fi
         mi f "Check frequency (now: every $INTERVAL min)"
         mi n "Notify me by email about new versions (now: $um)"
+        mi m "Mark all connected devices as known (no email is sent)"
         mi l "Read the log"
         mi t "Send a test email"
         mi u "Update (check and install)"
@@ -1189,6 +1191,11 @@ menu_settings() {
         case "$sc" in
             f|F) menu_interval; pause_enter ;;
             n|N) menu_update_mail; pause_enter ;;
+            m|M)
+                if menu_confirm "Mark all currently connected devices as known without a notification?"; then
+                    cmd_baseline
+                fi
+                pause_enter ;;
             l|L) cmd_log 40; pause_enter ;;
             t|T)
                 echo "Sending test email..."
@@ -1220,11 +1227,10 @@ cmd_menu() {
     touch "$KNOWN"
     while true; do
         menu_header
-        mi c "Check for new devices now"
-        mi v "View connected devices"
-        mi d "Known devices and details"
-        mi f "Forget a device"
-        mi m "Mark all connected devices as known"
+        mi 1 "Check for new devices now"
+        mi 2 "View connected devices"
+        mi 3 "Known devices and details"
+        mi 4 "Forget a device"
         mi s "Settings and maintenance"
         mi e "Exit (back to amtm)"
         echo
@@ -1232,7 +1238,7 @@ cmd_menu() {
         read -r choice || break
         echo
         case "$choice" in
-            c|C)
+            1)
                 cmd_run
                 if [ "$NEW_COUNT" -eq 0 ]; then
                     echo "Check done: no new devices."
@@ -1242,14 +1248,9 @@ cmd_menu() {
                     echo "Check done: $NEW_COUNT new, but the email was not sent (see the log)."
                 fi
                 pause_enter ;;
-            v|V) cmd_connected; pause_enter ;;
-            d|D) menu_devices ;;
-            f|F) menu_forget; pause_enter ;;
-            m|M)
-                if menu_confirm "Mark all currently connected devices as known without a notification?"; then
-                    cmd_baseline
-                fi
-                pause_enter ;;
+            2) cmd_connected; pause_enter ;;
+            3) menu_devices ;;
+            4) menu_forget; pause_enter ;;
             s|S) menu_settings; [ "$EXIT_MENU" = "1" ] && break ;;
             e|E|q|Q|0) break ;;
             "") ;;
