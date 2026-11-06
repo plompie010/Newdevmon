@@ -34,7 +34,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 ###############################################################################
 
-VERSION="0.1.3"
+VERSION="0.1.4"
 SCRIPT_NAME="newdevmon"
 SCRIPT_PATH="${NEWDEVMON_SCRIPT_PATH:-/jffs/scripts/newdevmon.sh}"
 DATA_DIR="${NEWDEVMON_DIR:-/jffs/addons/newdevmon}"
@@ -889,7 +889,7 @@ cmd_update_check() {
                 {
                     echo "A new version of $SCRIPT_NAME is available: $rv (installed: $VERSION)."
                     echo
-                    echo "To install: open the script through amtm (p) and choose u, or run:"
+                    echo "To install: open the script through amtm (p), then Settings > u, or run:"
                     echo "  $SCRIPT_PATH update"
                 } > "$TMPBASE.updmail"
                 send_mail "[Router] $SCRIPT_NAME update available ($rv)" "$TMPBASE.updmail" && echo "$rv" > "$DATA_DIR/update_notified"
@@ -1037,14 +1037,14 @@ menu_dashboard() {
             fi
         fi
     else
-        ctl="${C_R}NOT active${C_X} (press i)"
+        ctl="${C_R}NOT active${C_X} (Settings > i)"
     fi
     if mail_configured; then mail_txt="${C_G}configured${C_X}"; else mail_txt="${C_R}NOT configured${C_X} (amtm > em)"; fi
     printf '  %sChecking:%s   %s\n' "$C_D" "$C_X" "$ctl"
     printf '  %samtm mail:%s  %s\n' "$C_D" "$C_X" "$mail_txt"
     [ "$DRY_RUN" = "1" ] && printf '  %sMode:%s       DRY RUN\n' "$C_D" "$C_X"
     if [ -f "$UPDATE_FLAG" ]; then
-        printf '  %s** UPDATE AVAILABLE: %s (press u) **%s\n' "$C_Y" "$(cat "$UPDATE_FLAG")" "$C_X"
+        printf '  %s** UPDATE AVAILABLE: %s (Settings > u) **%s\n' "$C_Y" "$(cat "$UPDATE_FLAG")" "$C_X"
     fi
 }
 
@@ -1125,7 +1125,7 @@ menu_interval() {
         cmd_cron
         echo "Cron job updated."
     else
-        echo "Saved. The cron job is not active yet; press i in the main menu to install it."
+        echo "Saved. The cron job is not active yet; use Settings > i to install it."
     fi
 }
 
@@ -1137,22 +1137,49 @@ menu_update_mail() {
 }
 
 menu_settings() {
+    EXIT_MENU=0
     while true; do
         clear 2>/dev/null
         echo "=============================================================="
         printf '  %sSettings%s\n' "$C_B" "$C_X"
         echo "=============================================================="
         if [ "$UPDATE_MAIL" = "1" ]; then um="on"; else um="off"; fi
-        mi i "Check interval (now: $INTERVAL min)"
-        mi n "Email me when a new version is available (now: $um)"
+        mi f "Check frequency (now: every $INTERVAL min)"
+        mi n "Notify me by email about new versions (now: $um)"
+        mi l "Read the log"
+        mi t "Send a test email"
+        mi u "Update (check and install)"
+        mi p "Restore the previous version"
+        mi i "Install cron jobs and startup hook"
+        mi r "Remove cron jobs and startup hook"
         mi b "Back"
         echo
         printf '  Choice: '
         read -r sc || return
         echo
         case "$sc" in
-            i|I) menu_interval; pause_enter ;;
+            f|F) menu_interval; pause_enter ;;
             n|N) menu_update_mail; pause_enter ;;
+            l|L) cmd_log 40; pause_enter ;;
+            t|T)
+                echo "Sending test email..."
+                cmd_test && echo "Test email sent. Check your inbox."
+                pause_enter ;;
+            u|U)
+                UPDATED=0
+                cmd_update
+                pause_enter
+                [ "$UPDATED" = "1" ] && EXIT_MENU=1 && return ;;
+            p|P)
+                cmd_rollback
+                pause_enter
+                [ "$UPDATED" = "1" ] && EXIT_MENU=1 && return ;;
+            i|I) cmd_install; pause_enter ;;
+            r|R)
+                if menu_confirm "Remove the cron jobs and the startup hook?"; then
+                    cmd_uninstall
+                fi
+                pause_enter ;;
             b|B|"") return ;;
             *) echo "Unknown choice."; pause_enter ;;
         esac
@@ -1169,13 +1196,7 @@ cmd_menu() {
         mi d "Known devices and details"
         mi f "Forget a device"
         mi m "Mark all connected devices as known"
-        mi l "Read the log"
-        mi t "Send a test email"
-        mi s "Settings"
-        mi u "Update (check and install)"
-        mi p "Restore the previous version"
-        mi i "Install cron jobs and startup hook"
-        mi r "Remove cron jobs and startup hook"
+        mi s "Settings and maintenance"
         mi e "Exit (back to amtm)"
         echo
         printf '  Choice: '
@@ -1200,27 +1221,7 @@ cmd_menu() {
                     cmd_baseline
                 fi
                 pause_enter ;;
-            l|L) cmd_log 40; pause_enter ;;
-            t|T)
-                echo "Sending test email..."
-                cmd_test && echo "Test email sent. Check your inbox."
-                pause_enter ;;
-            s|S) menu_settings ;;
-            u|U)
-                UPDATED=0
-                cmd_update
-                pause_enter
-                [ "$UPDATED" = "1" ] && break ;;
-            p|P)
-                cmd_rollback
-                pause_enter
-                [ "$UPDATED" = "1" ] && break ;;
-            i|I) cmd_install; pause_enter ;;
-            r|R)
-                if menu_confirm "Remove the cron jobs and the startup hook?"; then
-                    cmd_uninstall
-                fi
-                pause_enter ;;
+            s|S) menu_settings; [ "$EXIT_MENU" = "1" ] && break ;;
             e|E|q|Q|0) break ;;
             "") ;;
             *) echo "Unknown choice."; pause_enter ;;
