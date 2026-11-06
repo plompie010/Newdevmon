@@ -35,7 +35,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 ###############################################################################
 
-VERSION="0.1.19"
+VERSION="0.1.21"
 SCRIPT_NAME="newdevmon"
 SCRIPT_PATH="${NEWDEVMON_SCRIPT_PATH:-/jffs/scripts/newdevmon.sh}"
 DATA_DIR="${NEWDEVMON_DIR:-/jffs/addons/newdevmon}"
@@ -109,6 +109,7 @@ function bandshort(b) {
     if (b ~ /^2G/) return "2.4G"
     if (b ~ /^5G/) return "5G"
     if (b ~ /^6G/) return "6G"
+    if (b ~ /^wired\?/) return "wired?"
     if (b ~ /^wired/) return "wired"
     return b
 }
@@ -232,7 +233,11 @@ link_info() {
                     sc = ((rssi[kk] != "" && rssi[kk] != "0") ? 4 : 0) + ((bnd[kk] !~ /^wired/) ? 2 : 0) + ((nd[kk] in isr) ? 0 : 1)
                     if (sc > bs) { bs = sc; best = kk }
                 }
-                if (all != "all") print m "|" nd[best] "|" bnd[best] "|" rssi[best] "|" ip[best]
+                # Behind an AiMesh node, "wired" is unreliable: nodes often do not report
+                # Wi-Fi clients (for example sleeping cameras), so these show up as wired.
+                b = bnd[best]
+                if (b ~ /^wired/ && !(nd[best] in isr)) b = "wired?"
+                if (all != "all") print m "|" nd[best] "|" b "|" rssi[best] "|" ip[best]
             }
         }'
 }
@@ -733,6 +738,7 @@ EOF
         2G*) conn="Wi-Fi 2.4 GHz" ;;
         5G*) conn="Wi-Fi 5 GHz" ;;
         6G*) conn="Wi-Fi 6 GHz" ;;
+        "wired?") conn="Wired? (the node does not report Wi-Fi; may be wireless)" ;;
         wired*) conn="Wired" ;;
         "") ;;
         *) conn="$lband" ;;
@@ -1240,14 +1246,28 @@ menu_device_detail() {
 
 # List of known devices, with details and forget at the bottom.
 menu_devices() {
+    msg=""
     while true; do
         new_screen
         cmd_list
+        [ -n "$msg" ] && printf '\n  %s\n' "$msg"
+        msg=""
         [ -s "$KNOWN" ] || { pause_enter; return; }
-        printf '\n  Number or MAC address = details\n  f) Forget a device\n  Enter) Back\n\n  Choice: '
+        printf '\n  Number or MAC address = details\n  c) Check for new devices now (refreshes the list)\n  f) Forget a device\n  Enter) Back\n\n  Choice: '
         read -r sel || return
         case "$sel" in
             "") return ;;
+            c|C)
+                IGNORE_MAIL_PAUSE=1
+                cmd_run >/dev/null 2>&1
+                IGNORE_MAIL_PAUSE=0
+                if [ "$NEW_COUNT" -eq 0 ]; then
+                    msg="Check done: no new devices."
+                elif [ "$SENT_OK" -eq 1 ]; then
+                    msg="Check done: reported $NEW_COUNT new device(s)."
+                else
+                    msg="Check done: $NEW_COUNT new, but the email was not sent (see the log)."
+                fi ;;
             f|F) menu_forget ;;
             *) menu_device_detail "$sel" ;;
         esac
@@ -1344,7 +1364,7 @@ cmd_menu() {
     while true; do
         menu_header
         mi 1 "Check for new devices now"
-        mi 2 "Devices (list, details, forget)"
+        mi 2 "Devices (list, check, details, forget)"
         mi s "Settings and maintenance"
         mi e "Exit (back to amtm)"
         echo
