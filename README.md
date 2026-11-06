@@ -102,9 +102,6 @@ rm -r /jffs/addons/newdevmon
 - **Er komt geen melding.** Kijk bij optie `2` of het apparaat in de lijst staat, en bij optie `3` of het al als bekend is opgeslagen.
 - **Cronjob verdwenen na een herstart.** Draai optie `i` opnieuw. Dit zet de regel in `/jffs/scripts/services-start`.
 
-## Bijdragen
-
-Verhoog bij elke wijziging het `VERSION`-nummer bovenin `newdevmon.sh`. Anders zien bestaande installaties de update niet.
 
 ## Licentie
 
