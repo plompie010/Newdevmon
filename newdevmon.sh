@@ -35,7 +35,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 ###############################################################################
 
-VERSION="0.1.16"
+VERSION="0.1.17"
 SCRIPT_NAME="newdevmon"
 SCRIPT_PATH="${NEWDEVMON_SCRIPT_PATH:-/jffs/scripts/newdevmon.sh}"
 DATA_DIR="${NEWDEVMON_DIR:-/jffs/addons/newdevmon}"
@@ -1127,7 +1127,13 @@ new_screen() {
 }
 
 hdr_line() {
-    awk -v t="$1" 'BEGIN { l = length(t); p = int((62 - l) / 2); printf "##%*s%s%*s##\n", p, "", t, 62 - l - p, "" }'
+    # No %*s here: busybox awk does not support it.
+    awk -v t="$1" 'BEGIN {
+        l = length(t); p = int((62 - l) / 2); q = 62 - l - p
+        sp = ""; for (i = 0; i < p; i++) sp = sp " "
+        sq = ""; for (i = 0; i < q; i++) sq = sq " "
+        print "##" sp t sq "##"
+    }'
 }
 
 # banner LINE1 LINE2: the boxed ASCII header, used for the menu and the exit screen.
