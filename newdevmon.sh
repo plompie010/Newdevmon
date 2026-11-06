@@ -35,7 +35,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 ###############################################################################
 
-VERSION="0.1.14"
+VERSION="0.1.15"
 SCRIPT_NAME="newdevmon"
 SCRIPT_PATH="${NEWDEVMON_SCRIPT_PATH:-/jffs/scripts/newdevmon.sh}"
 DATA_DIR="${NEWDEVMON_DIR:-/jffs/addons/newdevmon}"
@@ -1119,13 +1119,40 @@ menu_dashboard() {
     fi
 }
 
-menu_header() {
+# Clears the screen and prints a clearly visible bar, so a new screen is easy
+# to find when scrolling back (some terminals keep the old output).
+new_screen() {
     clear 2>/dev/null
-    echo "=============================================================="
-    printf '  %snewdevmon %s%s - New Device Monitor\n' "$C_B" "$VERSION" "$C_X"
-    echo "=============================================================="
+    printf '\n\n%s%s%s\n\n' "$C_Y" "$(printf '%66s' '' | tr ' ' '=')" "$C_X"
+}
+
+hdr_line() {
+    awk -v t="$1" 'BEGIN { l = length(t); p = int((62 - l) / 2); printf "##%*s%s%*s##\n", p, "", t, 62 - l - p, "" }'
+}
+
+menu_header() {
+    new_screen
+    model="$(nvram get model 2>/dev/null)"
+    [ -z "$model" ] && model="router"
+    bar="$(printf '%66s' '' | tr ' ' '#')"
+    printf '%s%s\n' "$C_B" "$bar"
+    cat <<'ART' | awk '{ printf "## %-59s  ##\n", $0 }'
+                        _                                  
+ _ __   _____      ____| | _____   ___ __ ___   ___  _ __  
+| '_ \ / _ \ \ /\ / / _` |/ _ \ \ / / '_ ` _ \ / _ \| '_ \ 
+| | | |  __/\ V  V / (_| |  __/\ V /| | | | | | (_) | | | |
+|_| |_|\___| \_/\_/ \__,_|\___| \_/ |_| |_| |_|\___/|_| |_|
+ART
+    hdr_line ""
+    hdr_line "New Device Monitor"
+    hdr_line "v$VERSION on $model"
+    hdr_line ""
+    hdr_line "https://github.com/$UPDATE_REPO"
+    hdr_line ""
+    printf '%s%s\n' "$bar" "$C_X"
+    echo
     menu_dashboard
-    echo "--------------------------------------------------------------"
+    echo "------------------------------------------------------------------"
 }
 
 mi() { printf '  %s) %s\n' "$1" "$2"; }
@@ -1150,7 +1177,7 @@ menu_forget() {
 
 # Detail screen of one device, with actions.
 menu_device_detail() {
-    clear 2>/dev/null
+    new_screen
     cmd_detail "$1" || { pause_enter; return; }
     mac="$(resolve_device "$1")"
     echo
@@ -1168,7 +1195,7 @@ menu_device_detail() {
 # List of known devices, with details and forget at the bottom.
 menu_devices() {
     while true; do
-        clear 2>/dev/null
+        new_screen
         cmd_list
         [ -s "$KNOWN" ] || { pause_enter; return; }
         printf '\n  Number or MAC address = details\n  f) Forget a device\n  Enter) Back\n\n  Choice: '
@@ -1230,7 +1257,7 @@ menu_settings() {
         echo
         printf '  Choice: '
         read -r sc || return
-        echo
+        case "$sc" in ""|b|B) ;; *) new_screen ;; esac
         case "$sc" in
             f|F) menu_interval; pause_enter ;;
             n|N) menu_update_mail; pause_enter ;;
@@ -1277,7 +1304,7 @@ cmd_menu() {
         echo
         printf '  Choice: '
         read -r choice || break
-        echo
+        case "$choice" in 2|s|S|e|E|q|Q|0|"") ;; *) new_screen ;; esac
         case "$choice" in
             1)
                 IGNORE_MAIL_PAUSE=1
