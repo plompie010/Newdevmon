@@ -74,6 +74,9 @@ Open Settings (`s`), press `r`, then delete `/jffs/scripts/newdevmon.sh` and `/j
 
 ## Changelog
 
+### 0.1.12
+- Settings menu shows the same header/dashboard as the main menu; title is now "New Device Monitor"
+
 ### 0.1.11
 - Devices list: MAC column removed (still in the detail screen), Node column added (router or AiMesh node the device is connected to)
 
