@@ -35,7 +35,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 ###############################################################################
 
-VERSION="0.1.11"
+VERSION="0.1.12"
 SCRIPT_NAME="newdevmon"
 SCRIPT_PATH="${NEWDEVMON_SCRIPT_PATH:-/jffs/scripts/newdevmon.sh}"
 DATA_DIR="${NEWDEVMON_DIR:-/jffs/addons/newdevmon}"
@@ -1103,7 +1103,7 @@ menu_dashboard() {
 menu_header() {
     clear 2>/dev/null
     echo "=============================================================="
-    printf '  %snewdevmon %s%s - new device notifications\n' "$C_B" "$VERSION" "$C_X"
+    printf '  %snewdevmon %s%s - New Device Monitor\n' "$C_B" "$VERSION" "$C_X"
     echo "=============================================================="
     menu_dashboard
     echo "--------------------------------------------------------------"
@@ -1195,10 +1195,8 @@ menu_update_mail() {
 menu_settings() {
     EXIT_MENU=0
     while true; do
-        clear 2>/dev/null
-        echo "=============================================================="
-        printf '  %sSettings%s\n' "$C_B" "$C_X"
-        echo "=============================================================="
+        menu_header
+        printf '  %sSettings and maintenance%s\n\n' "$C_B" "$C_X"
         if [ "$UPDATE_MAIL" = "1" ]; then um="on"; else um="off"; fi
         mi f "Check frequency (now: every $INTERVAL min)"
         mi n "Notify me by email about new versions (now: $um)"
