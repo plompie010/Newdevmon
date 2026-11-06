@@ -28,9 +28,9 @@ chmod 755 /jffs/scripts/newdevmon.sh
 
 Then start `amtm`, press `p`, and pick `newdevmon.sh`. In the menu choose:
 
-1. `t` to send a test email
+1. `s` then `t` to send a test email
 2. `m` to mark the devices currently connected as known (optional)
-3. `i` to install the cron jobs and the startup hook
+3. `s` then `i` to install the cron jobs and the startup hook
 
 ## Menu
 
@@ -41,16 +41,10 @@ Then start `amtm`, press `p`, and pick `newdevmon.sh`. In the menu choose:
 | `d` | Known **d**evices and details |
 | `f` | **F**orget a device (it will be reported again) |
 | `m` | **M**ark all connected devices as known |
-| `l` | Read the **l**og |
-| `t` | Send a **t**est email |
-| `s` | **S**ettings (check interval, email on new version) |
-| `u` | **U**pdate: check and install a new version |
-| `p` | Restore the **p**revious version |
-| `i` | **I**nstall cron jobs and startup hook |
-| `r` | **R**emove cron jobs and startup hook |
+| `s` | **S**ettings and maintenance (see below) |
 | `e` | **E**xit |
 
-Settings submenu: `i` check interval, `n` **n**otify by email about new versions, `b` back.
+Settings submenu: `f` check **f**requency, `n` **n**otify by email about new versions, `l` read the **l**og, `t` send a **t**est email, `u` **u**pdate, `p` restore the **p**revious version, `i` **i**nstall cron jobs and startup hook, `r` **r**emove them, `b` back.
 
 Command line: `newdevmon.sh [menu|run|cron|install|uninstall|baseline|test|list|detail NR|MAC|log|forget MAC|update-check|update [-y]|rollback]`
 
@@ -69,19 +63,26 @@ Command line: `newdevmon.sh [menu|run|cron|install|uninstall|baseline|test|list|
 
 ## Updates
 
-The repository is fixed in the script: `plompie010/Newdevmon` (branch `main`, file `newdevmon.sh`). A daily check sets an "update available" notice in the menu header, optionally with an email (Settings > `n`). Press `u` to install; the old version is backed up (3 kept) and can be restored with `p`.
+The repository is fixed in the script: `plompie010/Newdevmon` (branch `main`, file `newdevmon.sh`). A daily check sets an "update available" notice in the menu header, optionally with an email (Settings > `n`). Open `s` (Settings) then `u` to install; the old version is backed up (3 kept) and can be restored with `p` in the same submenu.
 
 ## Uninstall
 
-Press `r` in the menu, then delete `/jffs/scripts/newdevmon.sh` and `/jffs/addons/newdevmon`.
+Open Settings (`s`), press `r`, then delete `/jffs/scripts/newdevmon.sh` and `/jffs/addons/newdevmon`.
 
 ## Troubleshooting
 
-- **No email**: check amtm's email test first; then use `t`. Read the log with `l`.
+- **No email**: check amtm's email test first; then use Settings > `t`. Read the log with Settings > `l`.
 - **Everything shows as "Unknown network"**: the router could not map the IP to a bridge; run from the router itself, not a copy elsewhere.
 - **Update says latest version**: the `VERSION` in the repository must be higher than the installed one.
 
 ## Changelog
+
+### 0.1.5
+- Update screen shows the changelog of the new versions (from README.md) instead of a line count
+
+### 0.1.4
+- Log, test email, update, rollback, install and remove moved to the Settings submenu; main menu is shorter
+- Removed legacy Dutch label handling (reset the known-device list when upgrading from older versions)
 
 ### 0.1.3
 - Added band, signal, vendor, Asus name, MLO and AiMesh node (from Asus client lists)
@@ -98,7 +99,6 @@ Press `r` in the menu, then delete `/jffs/scripts/newdevmon.sh` and `/jffs/addon
 
 ### 0.1
 - Initial version: new-device mails, menu, GitHub update check
-
 
 ## License
 
