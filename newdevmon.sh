@@ -1,61 +1,62 @@
 #!/bin/sh
 ###############################################################################
-# newdevmon - meldt per e-mail wanneer een nieuw apparaat het netwerk op komt
+# newdevmon - sends an email when a new device joins your network
 #
-# Voor Asuswrt-Merlin. Gebruikt de e-mailinstellingen van amtm (amtm > em).
-# Controleert periodiek (cron) de DHCP-leases en de ARP-tabel van alle
-# LAN-bridges: br0 = hoofdnetwerk, br1/br2/... = gastnetwerken.
-# Een apparaat telt als "nieuw" zolang het MAC-adres niet in de lijst met
-# bekende apparaten staat. Nieuwe apparaten uit een controle komen samen in
-# één e-mail.
+# For Asuswrt-Merlin. Uses the email settings from amtm (amtm > em).
+# Periodically (cron) checks the DHCP leases and the ARP table of all LAN
+# bridges: br0 = main network, br1/br2/... = guest networks.
+# A device counts as "new" as long as its MAC address is not in the list of
+# known devices. New devices found in one check are reported in a single email.
 #
-# Zonder argumenten in een SSH-sessie (bijvoorbeeld vanuit amtm, optie p)
-# opent het menu. Voor gebruik in scripts/cron:
+# Started without arguments in an SSH session (for example from amtm, option p)
+# it opens a menu. For use in scripts/cron:
 #   newdevmon.sh [menu|run|cron|install|uninstall|baseline|test|list|detail NR|MAC|log|forget MAC]
 #   newdevmon.sh [update-check|update [-y]|rollback]
 #
-# Updates: het script controleert dagelijks of er in de GitHub-repo
-# plompie010/Newdevmon een nieuwere VERSION staat. Verhoog bij elke wijziging
-# die je in de repo zet het VERSION-nummer hieronder, anders ziet het script de
-# nieuwe versie niet als nieuwer.
+# Updates: once a day the script checks whether the GitHub repository
+# plompie010/Newdevmon contains a newer VERSION. Raise the VERSION number below
+# with every change you push to the repository, otherwise the script will not
+# see the new version as newer.
 #
 # Copyright (C) 2026 plompie010
 #
-# Dit programma is vrije software: je mag het verspreiden en/of aanpassen onder
-# de voorwaarden van de GNU General Public License, zoals gepubliceerd door de
-# Free Software Foundation, versie 3 van de licentie of (naar keuze) een latere
-# versie.
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
 #
-# Dit programma wordt verspreid in de hoop dat het nuttig is, maar ZONDER ENIGE
-# GARANTIE; zelfs zonder de impliciete garantie van VERKOOPBAARHEID of
-# GESCHIKTHEID VOOR EEN BEPAALD DOEL. Zie de GNU General Public License voor
-# meer details. Je hoort een kopie van de GPL te hebben ontvangen bij dit
-# programma; zo niet, zie <https://www.gnu.org/licenses/>.
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
 ###############################################################################
 
-VERSION="0.1.2"
+VERSION="0.1.3"
 SCRIPT_NAME="newdevmon"
 SCRIPT_PATH="${NEWDEVMON_SCRIPT_PATH:-/jffs/scripts/newdevmon.sh}"
 DATA_DIR="${NEWDEVMON_DIR:-/jffs/addons/newdevmon}"
-KNOWN="$DATA_DIR/known_devices.txt"          # mac|eerste_keer|ip|naam|netwerk
+KNOWN="$DATA_DIR/known_devices.txt"          # mac|first_seen|ip|name|network|last_seen_epoch
 CONF="$DATA_DIR/newdevmon.conf"
 LOGFILE="$DATA_DIR/newdevmon.log"
 LEASES="${NEWDEVMON_LEASES:-/var/lib/misc/dnsmasq.leases}"
 ARPFILE="${NEWDEVMON_ARP:-/proc/net/arp}"
 EMAIL_DIR="${NEWDEVMON_EMAIL_DIR:-/jffs/addons/amtm/mail}"
-AMTM_PW_KEY="ditbabot,isoi"                  # sleutel waarmee amtm emailpw.enc versleutelt (zie /jffs/addons/amtm/email.mod)
+AMTM_PW_KEY="ditbabot,isoi"                  # key amtm uses for emailpw.enc (see /jffs/addons/amtm/email.mod)
 LOCKDIR="/tmp/${SCRIPT_NAME}.lock"
-DRY_RUN="${NEWDEVMON_DRY_RUN:-0}"            # 1 = mail op scherm tonen, niet versturen
+DRY_RUN="${NEWDEVMON_DRY_RUN:-0}"            # 1 = print the email instead of sending it
 TMPBASE="/tmp/${SCRIPT_NAME}.$$"
 
-UPDATE_FLAG="$DATA_DIR/update_available"     # bevat het nummer van een gevonden nieuwere versie
+UPDATE_FLAG="$DATA_DIR/update_available"     # contains the number of a newer version, if found
 
-# Instellingen (worden via het menu in $CONF bewaard)
-INTERVAL=1                                   # minuten tussen controles
-UPDATE_MAIL=0                                # 1 = mail bij nieuwe versie
+# Settings (stored in $CONF through the menu)
+INTERVAL=1                                   # minutes between checks
+UPDATE_MAIL=0                                # 1 = email when a new version is available
 [ -f "$CONF" ] && . "$CONF"
 
-# Update-bron: vast ingesteld en bewust niet via config of menu te wijzigen.
+# Update source: fixed on purpose, not changeable through config or menu.
 UPDATE_REPO="plompie010/Newdevmon"
 UPDATE_BRANCH="main"
 UPDATE_FILE="newdevmon.sh"
@@ -63,14 +64,15 @@ case "$INTERVAL" in ''|*[!0-9]*) INTERVAL=1 ;; esac
 [ "$INTERVAL" -lt 1 ] && INTERVAL=1
 [ "$INTERVAL" -gt 59 ] && INTERVAL=59
 
-# Vluchtige status in het RAM (/tmp), zodat de flash niet elke minuut beschreven wordt.
+# Volatile state in RAM (/tmp), so the flash is not written every minute.
 STATE_DIR="${NEWDEVMON_STATE_DIR:-/tmp}"
-SEEN="$STATE_DIR/newdevmon.seen"             # mac|laatst_gezien_epoch|ip|naam|netwerk
-LASTRUN="$STATE_DIR/newdevmon.lastrun"       # epoch van de laatste controle
-PERSIST_TS="$STATE_DIR/newdevmon.persist"    # epoch van de laatste opslag naar JFFS
-NMP_FILE="${NEWDEVMON_NMP:-/jffs/nmp_cl_json.js}"   # clientlijst van Asus (netwerkoverzicht)
+SEEN="$STATE_DIR/newdevmon.seen"             # mac|last_seen_epoch|ip|name|network
+LASTRUN="$STATE_DIR/newdevmon.lastrun"       # epoch of the last check
+PERSIST_TS="$STATE_DIR/newdevmon.persist"    # epoch of the last write to JFFS
+NMP_FILE="${NEWDEVMON_NMP:-/jffs/nmp_cl_json.js}"                 # Asus client list (network map)
+CLIENTLIST_FILE="${NEWDEVMON_CLIENTLIST:-/tmp/clientlist.json}"   # Asus per-band client list (signal)
 
-# Kleuren alleen in een terminal (niet in cron, logs of mail).
+# Colours only in a terminal (not in cron, logs or email).
 USE_COLOR=0
 if [ "$NEWDEVMON_FORCE_COLOR" = "1" ]; then
     USE_COLOR=1
@@ -84,26 +86,33 @@ else
     C_G=""; C_R=""; C_Y=""; C_D=""; C_B=""; C_X=""
 fi
 
-# awk-hulpfuncties die in meerdere overzichten gebruikt worden.
+# awk helper functions used by several overviews.
 AWK_FN='
 function label(d) {
-    if (d == "br0") return "Hoofdnetwerk"
-    if (d ~ /^br/) return "Gastnetwerk (" d ")"
-    if (d == "") return "Onbekend netwerk"
-    return "Netwerk (" d ")"
+    if (d == "br0") return "Main network"
+    if (d ~ /^br/) return "Guest network (" d ")"
+    if (d == "") return "Unknown network"
+    return "Network (" d ")"
 }
 function trunc(s, n) { return (length(s) > n) ? substr(s, 1, n - 1) "~" : s }
 function ago(ep, now,   d) {
     if (ep <= 0) return "-"
     d = now - ep; if (d < 0) d = 0
-    if (d < 3600) return int(d / 60) " min geleden"
-    if (d < 86400) return int(d / 3600) " u geleden"
-    return int(d / 86400) " d geleden"
+    if (d < 3600) return int(d / 60) " min ago"
+    if (d < 86400) return int(d / 3600) " h ago"
+    return int(d / 86400) " d ago"
+}
+function bandshort(b) {
+    if (b ~ /^2G/) return "2.4G"
+    if (b ~ /^5G/) return "5G"
+    if (b ~ /^6G/) return "6G"
+    if (b ~ /^wired/) return "wired"
+    return b
 }
 '
 
 ###############################################################################
-# Hulpfuncties
+# Helper functions
 ###############################################################################
 
 now() { date '+%Y-%m-%d %H:%M:%S'; }
@@ -138,24 +147,111 @@ lock() {
     mkdir "$LOCKDIR" 2>/dev/null && echo $$ > "$LOCKDIR/pid"
 }
 
-# Geeft regels "mac|ip|naam|interface" voor alle nu bekende apparaten.
-scan() {
-    {
-        [ -r "$LEASES" ] && awk 'NF>=4 { h=$4; if (h=="*") h=""; print tolower($2) "|" $3 "|" h "|" }' "$LEASES"
-        [ -r "$ARPFILE" ] && awk 'NR>1 && ($3=="0x2" || $3=="0x6") && $4!="00:00:00:00:00:00" && $6 ~ /^br/ { print tolower($4) "|" $1 "||" $6 }' "$ARPFILE"
-    } | awk -F'|' '
-        $1 ~ /^[0-9a-f:]+$/ && length($1)==17 {
-            m = $1
-            if (!(m in seen)) { seen[m] = 1; order[++n] = m }
-            if ($2 != "") ip[m]   = $2
-            if ($3 != "") host[m] = $3
-            if ($4 != "") dev[m]  = $4
+# Asus network map data, one line per client:
+# mac|name|vendor|vendorclass|online|wireless|mlo   (mac in lower case)
+nmp_info() {
+    [ -r "$NMP_FILE" ] || return 1
+    tr -d '\r\n' < "$NMP_FILE" | sed 's/},"/}\n"/g' | awk '
+        function jstr(l, k,   re, v) {
+            re = "\"" k "\":\"[^\"]*\""
+            if (match(l, re)) {
+                v = substr(l, RSTART + length(k) + 4, RLENGTH - length(k) - 5)
+                gsub(/\|/, "/", v)
+                return v
+            }
+            return ""
         }
-        END { for (i = 1; i <= n; i++) { m = order[i]; print m "|" ip[m] "|" host[m] "|" dev[m] } }'
+        function jnum(l, k,   re) {
+            re = "\"" k "\":[0-9]+"
+            if (match(l, re)) return substr(l, RSTART + length(k) + 3, RLENGTH - length(k) - 3)
+            return ""
+        }
+        {
+            m = jstr($0, "mac")
+            if (m == "") next
+            print tolower(m) "|" jstr($0, "name") "|" jstr($0, "vendor") "|" jstr($0, "vendorclass") "|" jnum($0, "online") "|" jnum($0, "wireless") "|" jstr($0, "mlo")
+        }'
 }
 
-# Zelfde als scan, maar met de interface ingevuld en gesorteerd op netwerk
-# (hoofdnetwerk eerst, daarna gastnetwerken) en daarbinnen op IP-adres.
+# Live connection data per client from the Asus per-band client list:
+# mac|node_mac|band|rssi|ip   (band: 2G_1, 5G_1, wired_mac, ...)
+link_info() {
+    [ -r "$CLIENTLIST_FILE" ] || return 1
+    tr -d '\r\n' < "$CLIENTLIST_FILE" | awk '
+        function leaf(k, v,   mac, p) {
+            if (depth < 3 || (k != "ip" && k != "rssi")) return
+            mac = tolower(stack[depth])
+            p = stack[depth - 2] "/" stack[depth - 1]
+            if (!(mac in ent)) {
+                ent[mac] = 1; order[++n] = mac; path[mac] = p
+                band[mac] = stack[depth - 1]; node[mac] = tolower(stack[depth - 2])
+            }
+            if (path[mac] != p) return
+            if (k == "ip") ip[mac] = v; else rssi[mac] = v
+        }
+        {
+            s = $0; depth = 0; after = 0; last = ""; key = ""
+            while (length(s) > 0) {
+                c = substr(s, 1, 1)
+                if (c ~ /[[:space:]]/) { s = substr(s, 2); continue }
+                if (c == "\"") {
+                    if (!match(s, /^"[^"]*"/)) break
+                    tok = substr(s, 2, RLENGTH - 2); s = substr(s, RLENGTH + 1)
+                    if (after) { leaf(key, tok); after = 0 } else last = tok
+                    continue
+                }
+                if (c == "{" || c == "[") { depth++; stack[depth] = after ? key : ""; after = 0; s = substr(s, 2); continue }
+                if (c == "}" || c == "]") { depth--; after = 0; s = substr(s, 2); continue }
+                if (c == ":") { key = last; after = 1; s = substr(s, 2); continue }
+                if (c == ",") { after = 0; s = substr(s, 2); continue }
+                if (match(s, /^[^],}[:space:]]+/)) {
+                    tok = substr(s, 1, RLENGTH); s = substr(s, RLENGTH + 1)
+                    if (after) { leaf(key, tok); after = 0 }
+                    continue
+                }
+                s = substr(s, 2)
+            }
+        }
+        END {
+            for (i = 1; i <= n; i++) {
+                m = order[i]
+                if (m ~ /^[0-9a-f:]+$/ && length(m) == 17) print m "|" node[m] "|" band[m] "|" rssi[m] "|" ip[m]
+            }
+        }'
+}
+
+# Devices currently visible, one line per device: mac|ip|name|interface
+# Sources: DHCP leases + ARP table (which devices exist) and the Asus client list (names).
+scan() {
+    {
+        [ -r "$LEASES" ] && awk 'NF >= 4 { h = $4; if (h == "*") h = ""; print "D|" tolower($2) "|" $3 "|" h "||||" }' "$LEASES"
+        [ -r "$ARPFILE" ] && awk 'NR > 1 && ($3 == "0x2" || $3 == "0x6") && $4 != "00:00:00:00:00:00" && $6 ~ /^br/ { print "D|" tolower($4) "|" $1 "||" $6 "|||" }' "$ARPFILE"
+        nmp_info 2>/dev/null | awk -F'|' '{ print "A|" $1 "||||" $2 "|" $3 "|" $4 }'
+    } | awk -F'|' '
+        $2 !~ /^[0-9a-f:]+$/ || length($2) != 17 { next }
+        $1 == "D" {
+            m = $2
+            if (!(m in seen)) { seen[m] = 1; order[++n] = m }
+            if ($3 != "") ip[m] = $3
+            if ($4 != "") host[m] = $4
+            if ($5 != "") dev[m] = $5
+            next
+        }
+        $1 == "A" { an[$2] = $6; av[$2] = $7; avc[$2] = $8 }
+        END {
+            for (i = 1; i <= n; i++) {
+                m = order[i]
+                name = host[m]; a = an[m]
+                # Prefer the Asus name, unless it is just the vendor (class) string.
+                if (a != "" && a != av[m] && a != avc[m]) name = a
+                else if (name == "") name = a
+                print m "|" ip[m] "|" name "|" dev[m]
+            }
+        }'
+}
+
+# Same as scan, but with the interface filled in and sorted by network
+# (main network first, then guest networks) and by IP address within a network.
 scan_sorted() {
     scan | while IFS='|' read -r mac ip host dev; do
         [ -z "$dev" ] && [ -n "$ip" ] && dev="$(iface_for_ip "$ip")"
@@ -173,14 +269,14 @@ iface_for_ip() {
 
 label_for_iface() {
     case "$1" in
-        br0) echo "Hoofdnetwerk" ;;
-        br*) echo "Gastnetwerk ($1)" ;;
-        "")  echo "Onbekend netwerk" ;;
-        *)   echo "Netwerk ($1)" ;;
+        br0) echo "Main network" ;;
+        br*) echo "Guest network ($1)" ;;
+        "")  echo "Unknown network" ;;
+        *)   echo "Network ($1)" ;;
     esac
 }
 
-# Prive/willekeurige MAC (iPhone, Android, Windows): tweede hexcijfer is 2, 6, a of e.
+# Private/random MAC (iPhone, Android, Windows): the second hex digit is 2, 6, a or e.
 is_random_mac() {
     case "$(echo "$1" | cut -c2)" in
         2|6|a|e) return 0 ;;
@@ -192,8 +288,12 @@ known_count() { if [ -f "$KNOWN" ]; then wc -l < "$KNOWN"; else echo 0; fi; }
 
 is_known() { grep -qi "^${1}|" "$KNOWN" 2>/dev/null; }
 
-# Apparaten die Asus zelf als online ziet (netwerkoverzicht), als kleine letters.
-# Geeft niets en returncode 1 als het bestand ontbreekt.
+cron_active() { cru l 2>/dev/null | grep -q "$SCRIPT_NAME"; }
+
+mail_configured() { [ -f "$EMAIL_DIR/email.conf" ]; }
+
+# Devices that Asus itself sees as online (network map), in lower case.
+# Prints nothing and returns 1 if the file is missing.
 online_macs() {
     [ -r "$NMP_FILE" ] || return 1
     grep -Eo '"mac":"[0-9A-Fa-f:]{17}"[^{}]*"online":[01]' "$NMP_FILE" \
@@ -201,9 +301,9 @@ online_macs() {
     return 0
 }
 
-# update_seen SCANBESTAND: bewaart per apparaat wanneer het voor het laatst online was.
-# Bron voor "online": de clientlijst van Asus. Ontbreekt die, dan geldt alles wat in
-# de leases of ARP-tabel staat als gezien (minder nauwkeurig).
+# update_seen SCANFILE: records per device when it was last online.
+# Source for "online": the Asus client list. If that is missing, everything in
+# the leases or ARP table counts as seen (less accurate).
 update_seen() {
     ts="$(date +%s)"
     [ -f "$SEEN" ] || : > "$SEEN"
@@ -225,7 +325,7 @@ update_seen() {
             if ($2 != "") ip[$1] = $2
             if ($3 != "") nm[$1] = $3
             l = label($4)
-            if (l != "Onbekend netwerk" || lb[$1] == "") lb[$1] = l
+            if (l != "Unknown network" || lb[$1] == "") lb[$1] = l
             next
         }
         {
@@ -244,8 +344,8 @@ update_seen() {
     echo "$ts" > "$LASTRUN"
 }
 
-# Schrijft de laatst-gezien-gegevens uit het RAM terug naar het bestand met bekende
-# apparaten. Alleen als er iets veranderd is, om de flash te sparen.
+# Writes the last-seen data from RAM back to the file with known devices.
+# Only if something changed, to spare the flash.
 persist_seen() {
     [ -s "$SEEN" ] && [ -s "$KNOWN" ] || return 0
     awk -F'|' -v OFS='|' '
@@ -277,18 +377,18 @@ persist_seen_if_due() {
     fi
 }
 
-# seen_epoch MAC: laatst-gezien-epoch uit het RAM, of 0.
+# seen_epoch MAC: last-seen epoch from RAM, or 0.
 seen_epoch() {
     e="$(grep -i "^${1}|" "$SEEN" 2>/dev/null | head -n 1 | cut -d'|' -f2)"
     case "$e" in ''|*[!0-9]*) e=0 ;; esac
     echo "$e"
 }
 
-# Bekende apparaten gecombineerd met de laatst-gezien-gegevens uit het RAM.
-# Velden: g|netwerk|ipsleutel|regelnr|mac|eerst|ip|naam|netwerk|laatst_epoch|online
+# Known devices combined with the last-seen data from RAM.
+# Fields: g|network|ipkey|lineno|mac|first|ip|name|network|last_epoch|online
 joined_known() {
     [ -f "$SEEN" ] || : > "$SEEN"
-    awk -F'|' -v now="$(date +%s)" -v win="$((INTERVAL * 120 + 30))" '
+    awk -F'|' -v now="$(date +%s)" -v win="$((INTERVAL * 120 + 30))" "$AWK_FN"'
         FILENAME == ARGV[1] { sep[$1] = $2; sip[$1] = $3; snm[$1] = $4; slb[$1] = $5; next }
         {
             m = $1; ip = $3; nm = $4; lb = $5; ls = $6 + 0
@@ -300,34 +400,30 @@ joined_known() {
             }
             online = (ls > 0 && now - ls <= win) ? 1 : 0
             split(ip, o, ".")
-            g = (lb ~ /^Hoofd/) ? 0 : ((lb ~ /^Gast/) ? 1 : 2)
+            g = (lb ~ /^Main/) ? 0 : ((lb ~ /^Guest/) ? 1 : 2)
             printf "%d|%s|%03d%03d%03d%03d|%d|%s|%s|%s|%s|%s|%d|%d\n", g, lb, o[1], o[2], o[3], o[4], FNR, m, $2, ip, nm, lb, ls, online
         }
     ' "$SEEN" "$KNOWN"
 }
 
-cron_active() { cru l 2>/dev/null | grep -q "$SCRIPT_NAME"; }
-
-mail_configured() { [ -f "$EMAIL_DIR/email.conf" ]; }
-
 ###############################################################################
-# E-mail via de amtm-instellingen
+# Email through the amtm settings
 ###############################################################################
 
-# send_mail "onderwerp" "bestand met tekst"
+# send_mail "subject" "file with the body"
 send_mail() {
     subject="$1"
     bodyfile="$2"
 
     if [ "$DRY_RUN" = "1" ]; then
-        echo "----- DRY RUN: onderwerp: $subject -----"
+        echo "----- DRY RUN: subject: $subject -----"
         cat "$bodyfile"
-        echo "----- einde -----"
+        echo "----- end -----"
         return 0
     fi
 
     if ! mail_configured; then
-        log "amtm e-mailinstellingen ontbreken ($EMAIL_DIR/email.conf). Stel ze in via amtm > em."
+        log "amtm email settings are missing ($EMAIL_DIR/email.conf). Set them up in amtm > em."
         return 1
     fi
 
@@ -336,7 +432,7 @@ send_mail() {
 
     pw="$(/usr/sbin/openssl aes-256-cbc $emailPwEnc -d -in "$EMAIL_DIR/emailpw.enc" -pass "pass:$AMTM_PW_KEY" 2>/dev/null)"
     if [ -z "$pw" ]; then
-        log "Kon het e-mailwachtwoord uit amtm niet lezen."
+        log "Could not read the email password from amtm."
         return 1
     fi
 
@@ -356,8 +452,8 @@ send_mail() {
         sed 's/$/\r/' "$bodyfile"
     } > "$msg"
 
-    # Zelfde curl-aanroep als amtm zelf gebruikt (--user). Het wachtwoord staat
-    # daardoor kort in de proceslijst, net als bij amtm.
+    # Same curl call as amtm itself uses (--user). The password is therefore
+    # briefly visible in the process list, just like with amtm.
     CURL_BIN="curl"
     [ -x /usr/sbin/curl ] && CURL_BIN="/usr/sbin/curl"
 
@@ -372,16 +468,16 @@ send_mail() {
     unset pw
 
     if [ $rc -ne 0 ]; then
-        log "Versturen mislukt (curl exit $rc): $(tr '\n' ' ' < "$TMPBASE.curlerr")"
+        log "Sending failed (curl exit $rc): $(tr '\n' ' ' < "$TMPBASE.curlerr")"
     fi
     return $rc
 }
 
 ###############################################################################
-# Kernfuncties
+# Core functions
 ###############################################################################
 
-# Eén controle. Zet NEW_COUNT en SENT_OK voor het menu.
+# One check. Sets NEW_COUNT and SENT_OK for the menu.
 cmd_run() {
     NEW_COUNT=0
     SENT_OK=1
@@ -409,21 +505,21 @@ cmd_run() {
             iface="$(iface_for_ip "$ip")"
         fi
         label="$(label_for_iface "$iface")"
-        name="${host:-onbekend}"
+        name="${host:-unknown}"
         seen="$(now)"
 
         echo "${mac}|${seen}|${ip}|${name}|${label}|$(seen_epoch "$mac")" >> "$pending"
 
         {
-            echo "Naam:      $name"
+            echo "Name:       $name"
             if is_random_mac "$mac"; then
-                echo "MAC:       $mac (privé/willekeurig adres)"
+                echo "MAC:        $mac (private/random address)"
             else
-                echo "MAC:       $mac"
+                echo "MAC:        $mac"
             fi
-            echo "IP:        ${ip:-onbekend}"
-            echo "Netwerk:   $label"
-            echo "Gezien op: $seen"
+            echo "IP:         ${ip:-unknown}"
+            echo "Network:    $label"
+            echo "Seen at:    $seen"
             echo
         } >> "$body"
         count=$((count + 1))
@@ -433,22 +529,22 @@ cmd_run() {
     if [ "$count" -gt 0 ]; then
         {
             if [ "$count" -eq 1 ]; then
-                echo "Er is 1 nieuw apparaat verbonden met je netwerk:"
+                echo "1 new device connected to your network:"
             else
-                echo "Er zijn $count nieuwe apparaten verbonden met je netwerk:"
+                echo "$count new devices connected to your network:"
             fi
             echo
             cat "$body"
-            echo "Onbekend apparaat? Controleer het in de router of verander het wifi-wachtwoord."
-            echo "Een apparaat uit deze lijst wordt na deze melding als bekend beschouwd."
+            echo "Unknown device? Check it in the router or change the wifi password."
+            echo "A device in this list counts as known after this message."
         } > "$TMPBASE.final"
 
-        if send_mail "[Router] Nieuw apparaat op het netwerk ($count)" "$TMPBASE.final"; then
+        if send_mail "[Router] New device on the network ($count)" "$TMPBASE.final"; then
             cat "$pending" >> "$KNOWN"
-            log "$count nieuw(e) apparaat/apparaten gemeld: $(cut -d'|' -f1,4 "$pending" | tr '\n' ' ')"
+            log "Reported $count new device(s): $(cut -d'|' -f1,4 "$pending" | tr '\n' ' ')"
         else
             SENT_OK=0
-            log "Melding niet verstuurd; $count apparaat/apparaten blijven 'nieuw' en worden de volgende run opnieuw geprobeerd."
+            log "Message not sent; $count device(s) stay 'new' and will be retried on the next run."
         fi
     fi
 
@@ -469,21 +565,21 @@ cmd_baseline() {
         is_known "$mac" && continue
         iface="$dev"
         [ -z "$iface" ] && [ -n "$ip" ] && iface="$(iface_for_ip "$ip")"
-        echo "${mac}|$(now)|${ip}|${host:-onbekend}|$(label_for_iface "$iface")|$(seen_epoch "$mac")" >> "$KNOWN"
+        echo "${mac}|$(now)|${ip}|${host:-unknown}|$(label_for_iface "$iface")|$(seen_epoch "$mac")" >> "$KNOWN"
         n=$((n + 1))
     done < "$TMPBASE.scan"
-    log "Baseline: $n apparaat/apparaten als bekend toegevoegd."
-    echo "Totaal bekend: $(wc -l < "$KNOWN")."
+    log "Baseline: added $n device(s) as known."
+    echo "Total known: $(wc -l < "$KNOWN")."
     rm -f "$TMPBASE".*
 }
 
 cmd_test() {
-    printf 'Dit is een testmelding van %s.\nAls je dit leest, werken de amtm e-mailinstellingen.\n' "$SCRIPT_NAME" > "$TMPBASE.test"
-    if send_mail "[Router] Testmelding newdevmon" "$TMPBASE.test"; then
-        log "Testmail verstuurd."
+    printf 'This is a test message from %s.\nIf you can read this, the amtm email settings work.\n' "$SCRIPT_NAME" > "$TMPBASE.test"
+    if send_mail "[Router] Test message from newdevmon" "$TMPBASE.test"; then
+        log "Test email sent."
         rc=0
     else
-        echo "Testmail mislukt. Zie het log voor de reden."
+        echo "Test email failed. See the log for the reason."
         rc=1
     fi
     rm -f "$TMPBASE".*
@@ -492,11 +588,11 @@ cmd_test() {
 
 cmd_list() {
     if [ ! -s "$KNOWN" ]; then
-        echo "Nog geen bekende apparaten."
+        echo "No known devices yet."
         return
     fi
-    # Per netwerk gegroepeerd (hoofdnetwerk eerst), binnen een netwerk op IP-adres.
-    # Het nummer (#) blijft het regelnummer in het bestand.
+    # Grouped by network (main network first), by IP address within a network.
+    # The number (#) stays the line number in the file.
     joined_known | sort -t'|' -k1,1n -k2,2 -k3,3 | awk -F'|' \
         -v now="$(date +%s)" -v G="$C_G" -v D="$C_D" -v B="$C_B" -v X="$C_X" "$AWK_FN"'
         {
@@ -511,8 +607,8 @@ cmd_list() {
                 lab = f[9]
                 if (lab != prev) {
                     if (i > 1) print ""
-                    printf "%s== %s ==%s  %d apparaten, %d online\n", B, lab, X, tot[lab], on[lab] + 0
-                    printf "%s%-3s %-16s %-15s %-17s %-10s %s%s\n", D, "#", "Naam", "IP", "MAC", "Eerst", "Laatst gezien", X
+                    printf "%s== %s ==%s  %d devices, %d online\n", B, lab, X, tot[lab], on[lab] + 0
+                    printf "%s%-3s %-16s %-15s %-17s %-10s %s%s\n", D, "#", "Name", "IP", "MAC", "First", "Last seen", X
                     prev = lab
                 }
                 if (f[11] == 1) last = G "online" X
@@ -525,32 +621,35 @@ cmd_list() {
 cmd_connected() {
     scan_sorted > "$TMPBASE.scan"
     if [ ! -s "$TMPBASE.scan" ]; then
-        echo "Geen verbonden apparaten gevonden."
+        echo "No connected devices found."
         rm -f "$TMPBASE".*
         return
     fi
     [ -f "$KNOWN" ] || : > "$KNOWN"
+    link_info 2>/dev/null > "$TMPBASE.link" || : > "$TMPBASE.link"
     awk -F'|' -v R="$C_R" -v D="$C_D" -v B="$C_B" -v X="$C_X" "$AWK_FN"'
         FILENAME == ARGV[1] { fs[$1] = substr($2, 1, 10); next }
+        FILENAME == ARGV[2] { lk[$1] = bandshort($3) ($4 != "" ? " " $4 : ""); next }
         {
             lab = label($4)
             if (lab != prev) {
                 if (prev != "") print ""
                 printf "%s== %s ==%s\n", B, lab, X
-                printf "%s%-16s %-15s %-17s %s%s\n", D, "Naam", "IP", "MAC", "Eerst gezien", X
+                printf "%s%-16s %-15s %-17s %-9s %s%s\n", D, "Name", "IP", "MAC", "Link", "First seen", X
                 prev = lab
             }
-            if ($1 in fs) st = fs[$1]; else { st = R "NIEUW" X; nn++ }
-            nm = ($3 == "") ? "onbekend" : $3
-            printf "%-16s %-15s %-17s %s\n", trunc(nm, 16), ($2 == "" ? "-" : $2), $1, st
+            if ($1 in fs) st = fs[$1]; else { st = R "NEW" X; nn++ }
+            nm = ($3 == "") ? "unknown" : $3
+            lt = ($1 in lk) ? lk[$1] : "-"
+            printf "%-16s %-15s %-17s %-9s %s\n", trunc(nm, 16), ($2 == "" ? "-" : $2), $1, lt, st
             n++
         }
-        END { printf "\n%d apparaten in de leases/ARP-tabel, %d nieuw\n", n, nn + 0 }
-    ' "$KNOWN" "$TMPBASE.scan"
+        END { printf "\n%d devices in the leases/ARP table, %d new\n", n, nn + 0 }
+    ' "$KNOWN" "$TMPBASE.link" "$TMPBASE.scan"
     rm -f "$TMPBASE".*
 }
 
-# resolve_device NR_OF_MAC: geeft het MAC-adres bij een nummer uit de lijst (of het MAC zelf).
+# resolve_device NR_OR_MAC: returns the MAC address for a number from the list (or the MAC itself).
 resolve_device() {
     case "$1" in
         '') return 0 ;;
@@ -559,31 +658,96 @@ resolve_device() {
     esac
 }
 
-# Alle bekende gegevens van één apparaat.
+# All known details of one device.
 cmd_detail() {
     dmac="$(resolve_device "$1")"
     if [ -z "$dmac" ] || ! is_known "$dmac"; then
-        echo "Apparaat niet gevonden: ${1:-(geen invoer)}"
+        echo "Device not found: ${1:-(no input)}"
         return 1
     fi
     joined_known | awk -F'|' -v m="$dmac" -v now="$(date +%s)" \
         -v G="$C_G" -v R="$C_R" -v D="$C_D" -v B="$C_B" -v X="$C_X" "$AWK_FN"'
         $5 == m {
-            nm = ($8 == "") ? "onbekend" : $8
+            nm = ($8 == "") ? "unknown" : $8
             priv = (substr($5, 2, 1) ~ /[26ae]/)
             printf "%s== %s ==%s\n\n", B, nm, X
-            printf "  %-15s %s\n", "Naam:", nm
-            printf "  %-15s %s%s\n", "MAC-adres:", $5, (priv ? "  (privé/willekeurig adres)" : "")
-            printf "  %-15s %s\n", "IP-adres:", ($7 == "" ? "onbekend" : $7)
-            printf "  %-15s %s\n", "Netwerk:", $9
+            printf "  %-15s %s\n", "Name:", nm
+            printf "  %-15s %s%s\n", "MAC address:", $5, (priv ? "  (private/random address)" : "")
+            printf "  %-15s %s\n", "IP address:", ($7 == "" ? "unknown" : $7)
+            printf "  %-15s %s\n", "Network:", $9
             if ($11 == 1) st = G "online" X; else st = R "offline" X
             printf "  %-15s %s\n", "Status:", st
-            if ($10 + 0 > 0) ls = ($11 == 1) ? "nu" : ago($10, now); else ls = "nog niet online gezien"
-            printf "  %-15s %s\n", "Laatst gezien:", ls
-            printf "  %-15s %s\n", "Bekend sinds:", $6
-            printf "  %-15s %d\n", "Nr. in lijst:", $4
-            if (priv) printf "\n  %sEen privé-adres kan per netwerk of na een reset veranderen.\n  Hetzelfde apparaat verschijnt dan opnieuw als nieuw.%s\n", D, X
+            if ($10 + 0 > 0) ls = ($11 == 1) ? "now" : ago($10, now); else ls = "not seen online yet"
+            printf "  %-15s %s\n", "Last seen:", ls
+            printf "  %-15s %s\n", "Known since:", $6
+            printf "  %-15s %d\n", "List no.:", $4
         }'
+
+    # Extra data from the router (Asus client lists).
+    dnmp="$(nmp_info 2>/dev/null | awk -F'|' -v m="$dmac" '$1 == m { print; exit }')"
+    dlink="$(link_info 2>/dev/null | awk -F'|' -v m="$dmac" '$1 == m { print; exit }')"
+    IFS='|' read -r _m an av avc aon awl amlo <<EOF
+$dnmp
+EOF
+    IFS='|' read -r _l lnode lband lrssi lip <<EOF
+$dlink
+EOF
+
+    conn=""
+    case "$lband" in
+        2G*) conn="Wi-Fi 2.4 GHz" ;;
+        5G*) conn="Wi-Fi 5 GHz" ;;
+        6G*) conn="Wi-Fi 6 GHz" ;;
+        wired*) conn="Wired" ;;
+        "") ;;
+        *) conn="$lband" ;;
+    esac
+    if [ -z "$conn" ] && [ "$aon" = "1" ]; then
+        case "$awl" in
+            0) conn="Wired" ;;
+            1) conn="Wi-Fi 2.4 GHz" ;;
+            2) conn="Wi-Fi 5 GHz" ;;
+            ?*) conn="Wi-Fi" ;;
+        esac
+    fi
+
+    sig=""
+    case "$lrssi" in
+        -[0-9]*|[0-9]*)
+            if   [ "$lrssi" -ge -50 ]; then q="excellent"
+            elif [ "$lrssi" -ge -60 ]; then q="good"
+            elif [ "$lrssi" -ge -70 ]; then q="fair"
+            else q="weak"; fi
+            sig="$lrssi dBm ($q)" ;;
+    esac
+
+    via=""
+    if [ -n "$lnode" ]; then
+        rmacs=""
+        for v in lan_hwaddr et0macaddr label_mac; do
+            rmacs="$rmacs $(nvram get "$v" 2>/dev/null | tr 'A-F' 'a-f')"
+        done
+        case " $rmacs " in
+            *" $lnode "*) via="Router (this device)" ;;
+            *)
+                nname="$(nmp_info 2>/dev/null | awk -F'|' -v m="$lnode" '$1 == m { print $2; exit }')"
+                via="AiMesh node ${nname:+$nname }($lnode)" ;;
+        esac
+    fi
+
+    if [ -n "$conn$sig$via$av$an" ]; then
+        echo
+        [ -n "$conn" ] && printf '  %-15s %s\n' "Connection:" "$conn"
+        [ -n "$sig" ]  && printf '  %-15s %s\n' "Signal:" "$sig"
+        [ -n "$via" ]  && printf '  %-15s %s\n' "Connected to:" "$via"
+        [ -n "$av" ]   && printf '  %-15s %s\n' "Vendor:" "$av"
+        [ -n "$an" ]   && printf '  %-15s %s\n' "Asus name:" "$an"
+        [ "$amlo" = "1" ] && printf '  %-15s %s\n' "MLO:" "yes"
+    fi
+
+    if is_random_mac "$dmac"; then
+        printf '\n  %sA private address can change per network or after a reset.\n  The same device then shows up again as new.%s\n' "$C_D" "$C_X"
+    fi
 }
 
 cmd_log() {
@@ -591,24 +755,24 @@ cmd_log() {
     if [ -s "$LOGFILE" ]; then
         tail -n "$n" "$LOGFILE"
     else
-        echo "Het log is nog leeg."
+        echo "The log is still empty."
     fi
 }
 
 cmd_forget() {
     mac="$(echo "$1" | tr 'A-F' 'a-f')"
-    [ -z "$mac" ] && { echo "Gebruik: $0 forget MAC-adres"; return 1; }
+    [ -z "$mac" ] && { echo "Usage: $0 forget MAC-ADDRESS"; return 1; }
     if ! is_known "$mac"; then
-        echo "$mac staat niet in de lijst."
+        echo "$mac is not in the list."
         return 1
     fi
     grep -vi "^${mac}|" "$KNOWN" > "$TMPBASE.known"
     cat "$TMPBASE.known" > "$KNOWN"
     rm -f "$TMPBASE".*
-    log "Vergeten: $mac (wordt bij de volgende controle opnieuw gemeld als hij verbonden is)."
+    log "Forgot $mac (it will be reported again at the next check if it is connected)."
 }
 
-# Zet de cronjob volgens het ingestelde interval (ook aangeroepen door services-start).
+# Sets the cron jobs according to the configured interval (also called by services-start).
 cmd_cron() {
     if [ "$INTERVAL" -le 1 ]; then
         expr="* * * * *"
@@ -618,7 +782,7 @@ cmd_cron() {
     cru d "$SCRIPT_NAME" 2>/dev/null
     cru a "$SCRIPT_NAME" "$expr $SCRIPT_PATH run"
 
-    # Dagelijkse update-check.
+    # Daily update check.
     cru d "${SCRIPT_NAME}-update" 2>/dev/null
     cru a "${SCRIPT_NAME}-update" "23 5 * * * $SCRIPT_PATH update-check"
 }
@@ -627,7 +791,7 @@ cmd_install() {
     mkdir -p "$DATA_DIR" /jffs/scripts
     self="$(readlink -f "$0" 2>/dev/null)"
     if [ "$self" != "$SCRIPT_PATH" ]; then
-        cp "$0" "$SCRIPT_PATH" || { echo "Kopiëren naar $SCRIPT_PATH mislukt."; return 1; }
+        cp "$0" "$SCRIPT_PATH" || { echo "Copying to $SCRIPT_PATH failed."; return 1; }
     fi
     chmod 755 "$SCRIPT_PATH"
 
@@ -636,22 +800,22 @@ cmd_install() {
     hook="/jffs/scripts/services-start"
     [ -f "$hook" ] || printf '#!/bin/sh\n' > "$hook"
     chmod 755 "$hook"
-    # Oude regels vervangen, ook die van een eerdere bestandsnaam (bijv. newdevmon.sh).
+    # Replace old lines, including those of an earlier file name.
     sed -i "/$SCRIPT_NAME/d" "$hook"
     printf '%s cron # %s\n' "$SCRIPT_PATH" "$SCRIPT_NAME" >> "$hook"
 
-    log "Geïnstalleerd: cronjob (elke $INTERVAL min) + opstarthook in $hook."
+    log "Installed: cron job (every $INTERVAL min) + startup hook in $hook."
 }
 
 cmd_uninstall() {
     cru d "$SCRIPT_NAME" 2>/dev/null
     cru d "${SCRIPT_NAME}-update" 2>/dev/null
     [ -f /jffs/scripts/services-start ] && sed -i "/$SCRIPT_NAME/d" /jffs/scripts/services-start
-    log "Cronjob en opstarthook verwijderd. Data blijft staan in $DATA_DIR."
+    log "Cron jobs and startup hook removed. Data remains in $DATA_DIR."
 }
 
 ###############################################################################
-# Updates via GitHub
+# Updates through GitHub
 ###############################################################################
 
 save_conf() {
@@ -663,11 +827,11 @@ save_conf() {
 }
 
 update_url() {
-    # NEWDEVMON_TEST_UPDATE_URL is alleen bedoeld voor tests (bijv. file://...).
+    # NEWDEVMON_TEST_UPDATE_URL is for tests only (for example file://...).
     echo "${NEWDEVMON_TEST_UPDATE_URL:-https://raw.githubusercontent.com/${UPDATE_REPO}/${UPDATE_BRANCH}/${UPDATE_FILE}}"
 }
 
-# ver_gt A B: geslaagd (0) als versie A nieuwer is dan versie B (formaat x.y.z)
+# ver_gt A B: succeeds (0) if version A is newer than version B (format x.y.z)
 ver_gt() {
     awk -v a="$1" -v b="$2" 'BEGIN {
         na = split(a, x, "."); nb = split(b, y, ".")
@@ -685,62 +849,62 @@ remote_version() {
     sed -n 's/^VERSION="\([0-9][0-9.]*\)".*/\1/p' "$1" | head -n 1
 }
 
-# fetch_remote BESTAND: download het script uit de repo naar BESTAND.
+# fetch_remote FILE: downloads the script from the repository to FILE.
 fetch_remote() {
     CURL_BIN="curl"
     [ -x /usr/sbin/curl ] && CURL_BIN="/usr/sbin/curl"
     if ! "$CURL_BIN" -fsSL --max-time 30 --retry 2 "$(update_url)" -o "$1" 2>"$TMPBASE.fetcherr"; then
-        log "Update-check mislukt: $(tr '\n' ' ' < "$TMPBASE.fetcherr")"
-        echo "Downloaden mislukt (zie log). Controleer de internetverbinding van de router."
+        log "Update check failed: $(tr '\n' ' ' < "$TMPBASE.fetcherr")"
+        echo "Download failed (see the log). Check the router's internet connection."
         return 1
     fi
     return 0
 }
 
-# validate_remote BESTAND: controleert of het gedownloade bestand echt dit script is.
+# validate_remote FILE: checks that the downloaded file really is this script.
 validate_remote() {
-    head -n 1 "$1" | grep -q '^#!/bin/sh' || { echo "Het gedownloade bestand lijkt geen shellscript."; return 1; }
-    grep -q "^SCRIPT_NAME=\"$SCRIPT_NAME\"" "$1" || { echo "Het gedownloade bestand is niet $SCRIPT_NAME."; return 1; }
-    sh -n "$1" 2>/dev/null || { echo "Het gedownloade script heeft een syntaxfout."; return 1; }
-    [ -n "$(remote_version "$1")" ] || { echo "Geen versienummer gevonden in het gedownloade bestand."; return 1; }
+    head -n 1 "$1" | grep -q '^#!/bin/sh' || { echo "The downloaded file does not look like a shell script."; return 1; }
+    grep -q "^SCRIPT_NAME=\"$SCRIPT_NAME\"" "$1" || { echo "The downloaded file is not $SCRIPT_NAME."; return 1; }
+    sh -n "$1" 2>/dev/null || { echo "The downloaded script has a syntax error."; return 1; }
+    [ -n "$(remote_version "$1")" ] || { echo "No version number found in the downloaded file."; return 1; }
     return 0
 }
 
-# Draait dagelijks via cron. Zet een vlag en meldt (optioneel per mail) bij een nieuwe versie.
+# Runs daily through cron. Sets a flag and notifies (optionally by email) about a new version.
 cmd_update_check() {
     mkdir -p "$DATA_DIR"
     fetch_remote "$TMPBASE.remote" || { rm -f "$TMPBASE".*; return 1; }
     if ! validate_remote "$TMPBASE.remote"; then
-        log "Update-check: ongeldig bestand in de repo, niet gebruikt."
+        log "Update check: invalid file in the repository, not used."
         rm -f "$TMPBASE".*
         return 1
     fi
     rv="$(remote_version "$TMPBASE.remote")"
     if ver_gt "$rv" "$VERSION"; then
         echo "$rv" > "$UPDATE_FLAG"
-        echo "Nieuwe versie beschikbaar: $rv (jij hebt $VERSION)."
+        echo "New version available: $rv (you have $VERSION)."
         if [ "$(cat "$DATA_DIR/update_notified" 2>/dev/null)" != "$rv" ]; then
-            log "Nieuwe versie beschikbaar: $rv (huidig $VERSION)."
+            log "New version available: $rv (current $VERSION)."
             if [ "$UPDATE_MAIL" = "1" ]; then
                 {
-                    echo "Er is een nieuwe versie van $SCRIPT_NAME beschikbaar: $rv (geïnstalleerd: $VERSION)."
+                    echo "A new version of $SCRIPT_NAME is available: $rv (installed: $VERSION)."
                     echo
-                    echo "Installeren: open het script via amtm (p) en kies 9, of draai:"
+                    echo "To install: open the script through amtm (p) and choose u, or run:"
                     echo "  $SCRIPT_PATH update"
                 } > "$TMPBASE.updmail"
-                send_mail "[Router] $SCRIPT_NAME update beschikbaar ($rv)" "$TMPBASE.updmail" && echo "$rv" > "$DATA_DIR/update_notified"
+                send_mail "[Router] $SCRIPT_NAME update available ($rv)" "$TMPBASE.updmail" && echo "$rv" > "$DATA_DIR/update_notified"
             else
                 echo "$rv" > "$DATA_DIR/update_notified"
             fi
         fi
     else
         rm -f "$UPDATE_FLAG"
-        echo "Je hebt de nieuwste versie ($VERSION)."
+        echo "You have the latest version ($VERSION)."
     fi
     rm -f "$TMPBASE".*
 }
 
-# Controleert op een nieuwere versie en installeert die na bevestiging (of met -y).
+# Checks for a newer version and installs it after confirmation (or with -y).
 cmd_update() {
     UPDATED=0
     mkdir -p "$DATA_DIR"
@@ -749,20 +913,20 @@ cmd_update() {
     rv="$(remote_version "$TMPBASE.remote")"
 
     if ! ver_gt "$rv" "$VERSION"; then
-        echo "Je hebt de nieuwste versie ($VERSION); in de repo staat $rv."
+        echo "You have the latest version ($VERSION); the repository has $rv."
         rm -f "$UPDATE_FLAG"
         rm -f "$TMPBASE".*
         return 0
     fi
 
     changed="$(diff "$SCRIPT_PATH" "$TMPBASE.remote" 2>/dev/null | grep -c '^[<>]')"
-    echo "Update beschikbaar: $VERSION -> $rv (${changed:-0} regels gewijzigd)"
-    echo "Bron: $(update_url)"
+    echo "Update available: $VERSION -> $rv (${changed:-0} lines changed)"
+    echo "Source: $(update_url)"
     if [ "$1" != "-y" ]; then
         if [ -t 0 ] && [ -t 1 ]; then
-            menu_confirm "Nu installeren?" || { echo "Geannuleerd."; rm -f "$TMPBASE".*; return 0; }
+            menu_confirm "Install now?" || { echo "Cancelled."; rm -f "$TMPBASE".*; return 0; }
         else
-            echo "Niet-interactief: gebruik 'update -y' om te installeren."
+            echo "Not interactive: use 'update -y' to install."
             rm -f "$TMPBASE".*
             return 1
         fi
@@ -770,74 +934,75 @@ cmd_update() {
 
     mkdir -p "$DATA_DIR/backup"
     bk="$DATA_DIR/backup/${SCRIPT_NAME}-v${VERSION}-$(date +%Y%m%d%H%M%S)"
-    cp "$SCRIPT_PATH" "$bk" || { log "Update afgebroken: backup maken mislukt."; rm -f "$TMPBASE".*; return 1; }
-    # Houd de 3 nieuwste backups.
+    cp "$SCRIPT_PATH" "$bk" || { log "Update aborted: could not make a backup."; rm -f "$TMPBASE".*; return 1; }
+    # Keep the 3 newest backups.
     ls -1t "$DATA_DIR/backup" | tail -n +4 | while read -r old; do rm -f "$DATA_DIR/backup/$old"; done
 
-    # Via tijdelijk bestand + mv, zodat het draaiende script niet wordt overschreven.
+    # Through a temporary file + mv, so the running script is not overwritten in place.
     if cp "$TMPBASE.remote" "$SCRIPT_PATH.new" && chmod 755 "$SCRIPT_PATH.new" && mv "$SCRIPT_PATH.new" "$SCRIPT_PATH"; then
         rm -f "$UPDATE_FLAG" "$DATA_DIR/update_notified"
-        log "Bijgewerkt van $VERSION naar $rv. Backup: $bk"
-        echo "Bijgewerkt naar $rv. Start het script opnieuw om de nieuwe versie te gebruiken."
+        log "Updated from $VERSION to $rv. Backup: $bk"
+        echo "Updated to $rv. Start the script again to use the new version."
         UPDATED=1
     else
         rm -f "$SCRIPT_PATH.new"
-        log "Update mislukt bij het vervangen van $SCRIPT_PATH; huidige versie is ongewijzigd."
-        echo "Update mislukt; de huidige versie is ongewijzigd."
+        log "Update failed while replacing $SCRIPT_PATH; the current version is unchanged."
+        echo "Update failed; the current version is unchanged."
     fi
     rm -f "$TMPBASE".*
 }
 
 cmd_rollback() {
+    UPDATED=0
     latest="$(ls -1t "$DATA_DIR/backup" 2>/dev/null | head -n 1)"
     if [ -z "$latest" ]; then
-        echo "Geen backups gevonden."
+        echo "No backups found."
         return 1
     fi
-    echo "Terugzetten naar backup: $latest"
+    echo "Restoring backup: $latest"
     if [ -t 0 ] && [ -t 1 ]; then
-        menu_confirm "Doorgaan?" || { echo "Geannuleerd."; return 0; }
+        menu_confirm "Continue?" || { echo "Cancelled."; return 0; }
     fi
     if cp "$DATA_DIR/backup/$latest" "$SCRIPT_PATH.new" && chmod 755 "$SCRIPT_PATH.new" && mv "$SCRIPT_PATH.new" "$SCRIPT_PATH"; then
-        log "Teruggezet naar backup $latest."
-        echo "Teruggezet. Start het script opnieuw."
+        log "Restored backup $latest."
+        echo "Restored. Start the script again."
         UPDATED=1
     else
         rm -f "$SCRIPT_PATH.new"
-        echo "Terugzetten mislukt."
+        echo "Restore failed."
         return 1
     fi
 }
 
 cmd_status() {
-    echo "newdevmon $VERSION - melding bij nieuwe apparaten"
+    echo "newdevmon $VERSION - notifies you about new devices"
     if [ -f "$UPDATE_FLAG" ]; then
-        echo "Update:            versie $(cat "$UPDATE_FLAG") beschikbaar (draai: $SCRIPT_PATH update)"
+        echo "Update:            version $(cat "$UPDATE_FLAG") available (run: $SCRIPT_PATH update)"
     fi
     if cron_active; then
-        echo "Cronjob:           actief (elke $INTERVAL min)"
+        echo "Cron job:          active (every $INTERVAL min)"
     else
-        echo "Cronjob:           NIET actief (draai: $SCRIPT_PATH install)"
+        echo "Cron job:          NOT active (run: $SCRIPT_PATH install)"
     fi
     if mail_configured; then
-        echo "amtm e-mail:       ingesteld"
+        echo "amtm email:        configured"
     else
-        echo "amtm e-mail:       NIET ingesteld (amtm > em)"
+        echo "amtm email:        NOT configured (amtm > em)"
     fi
-    echo "Bekende apparaten: $(known_count)"
-    [ "$DRY_RUN" = "1" ] && echo "Modus:             DRY RUN (er wordt niets verstuurd)"
+    echo "Known devices:     $(known_count)"
+    [ "$DRY_RUN" = "1" ] && echo "Mode:              DRY RUN (nothing is sent)"
     echo
-    echo "Opdrachten: menu | run | cron | install | uninstall | baseline | test | list | detail NR|MAC | log | forget MAC"
-    echo "            update-check | update [-y] | rollback"
+    echo "Commands: menu | run | cron | install | uninstall | baseline | test | list | detail NR|MAC | log | forget MAC"
+    echo "          update-check | update [-y] | rollback"
 }
 
 ###############################################################################
 # Menu
 ###############################################################################
 
-pause_enter() { printf '\nDruk op Enter om verder te gaan... '; read -r _dummy || true; }
+pause_enter() { printf '\nPress Enter to continue... '; read -r _dummy || true; }
 
-# Compact overzicht bovenaan het menu.
+# Compact overview at the top of the menu.
 menu_dashboard() {
     if [ -s "$KNOWN" ]; then
         joined_known | sort -t'|' -k1,1n -k2,2 | awk -F'|' -v G="$C_G" -v D="$C_D" -v X="$C_X" '
@@ -846,14 +1011,14 @@ menu_dashboard() {
                 for (i = 1; i <= n; i++) {
                     lab = ord[i]
                     c = (o[lab] > 0) ? G : D
-                    printf "  %-20s %3d bekend, %s%3d online%s\n", lab, t[lab], c, o[lab] + 0, X
+                    printf "  %-20s %3d known, %s%3d online%s\n", lab, t[lab], c, o[lab] + 0, X
                 }
             }'
         tail -n 1 "$KNOWN" | awk -F'|' -v D="$C_D" -v X="$C_X" '
-            { nm = ($4 == "") ? "onbekend" : $4
-              printf "  %sNieuwste:%s  %s (%s), %s\n", D, X, nm, $5, substr($2, 1, 16) }'
+            { nm = ($4 == "") ? "unknown" : $4
+              printf "  %sNewest:%s     %s, %s\n", D, X, nm, substr($2, 1, 16) }'
     else
-        echo "  Nog geen bekende apparaten."
+        echo "  No known devices yet."
     fi
 
     now_ep="$(date +%s)"
@@ -861,112 +1026,137 @@ menu_dashboard() {
     case "$last" in ''|*[!0-9]*) last="" ;; esac
     if cron_active; then
         if [ -z "$last" ]; then
-            ctl="${C_G}actief${C_X}, elke $INTERVAL min; nog niet gedraaid"
+            ctl="${C_G}active${C_X}, every $INTERVAL min; not run yet"
         else
             age=$(( (now_ep - last) / 60 ))
             limit=$(( INTERVAL * 3 )); [ "$limit" -lt 5 ] && limit=5
             if [ "$age" -gt "$limit" ]; then
-                ctl="${C_R}laatste controle $age min geleden${C_X}"
+                ctl="${C_R}last check $age min ago${C_X}"
             else
-                ctl="${C_G}actief${C_X}, elke $INTERVAL min; laatste $age min geleden"
+                ctl="${C_G}active${C_X}, every $INTERVAL min; last $age min ago"
             fi
         fi
     else
-        ctl="${C_R}NIET actief${C_X} (kies i)"
+        ctl="${C_R}NOT active${C_X} (press i)"
     fi
-    if mail_configured; then mail_txt="${C_G}ingesteld${C_X}"; else mail_txt="${C_R}NIET ingesteld${C_X} (amtm > em)"; fi
-    printf '  %sControle:%s  %s\n' "$C_D" "$C_X" "$ctl"
-    printf '  %sAmtm mail:%s %s\n' "$C_D" "$C_X" "$mail_txt"
-    [ "$DRY_RUN" = "1" ] && printf '  %sModus:%s     DRY RUN\n' "$C_D" "$C_X"
+    if mail_configured; then mail_txt="${C_G}configured${C_X}"; else mail_txt="${C_R}NOT configured${C_X} (amtm > em)"; fi
+    printf '  %sChecking:%s   %s\n' "$C_D" "$C_X" "$ctl"
+    printf '  %samtm mail:%s  %s\n' "$C_D" "$C_X" "$mail_txt"
+    [ "$DRY_RUN" = "1" ] && printf '  %sMode:%s       DRY RUN\n' "$C_D" "$C_X"
     if [ -f "$UPDATE_FLAG" ]; then
-        printf '  %s** UPDATE BESCHIKBAAR: %s (kies 9) **%s\n' "$C_Y" "$(cat "$UPDATE_FLAG")" "$C_X"
+        printf '  %s** UPDATE AVAILABLE: %s (press u) **%s\n' "$C_Y" "$(cat "$UPDATE_FLAG")" "$C_X"
     fi
 }
 
 menu_header() {
     clear 2>/dev/null
     echo "=============================================================="
-    printf '  %snewdevmon %s%s - nieuwe apparaten melden\n' "$C_B" "$VERSION" "$C_X"
+    printf '  %snewdevmon %s%s - new device notifications\n' "$C_B" "$VERSION" "$C_X"
     echo "=============================================================="
     menu_dashboard
     echo "--------------------------------------------------------------"
 }
 
-menu_update_mail() {
-    if [ "$UPDATE_MAIL" = "1" ]; then UPDATE_MAIL=0; txt="uit"; else UPDATE_MAIL=1; txt="aan"; fi
-    save_conf
-    log "Mail bij nieuwe versie: $txt."
-    echo "Mail bij nieuwe versie staat nu $txt."
+mi() { printf '  %s) %s\n' "$1" "$2"; }
+
+menu_confirm() {
+    printf '%s (y/N): ' "$1"
+    read -r a || return 1
+    case "$a" in y|Y|yes|YES) return 0 ;; *) return 1 ;; esac
 }
 
-# Detailscherm van één apparaat met acties.
+menu_forget() {
+    cmd_list
+    [ -s "$KNOWN" ] || return
+    printf '\nNumber or MAC address to forget (empty = cancel): '
+    read -r sel || return
+    [ -z "$sel" ] && return
+    mac="$(resolve_device "$sel")"
+    [ -z "$mac" ] && { echo "Invalid choice."; return; }
+    cmd_forget "$mac"
+}
+
+# Detail screen of one device, with actions.
 menu_device_detail() {
     clear 2>/dev/null
     cmd_detail "$1" || { pause_enter; return; }
     mac="$(resolve_device "$1")"
     echo
-    printf '  v) Vergeten (opnieuw laten melden)    Enter) terug: '
+    printf '  f) Forget this device (report it again)    Enter) back: '
     read -r act || return
     case "$act" in
-        v|V)
-            if menu_confirm "Dit apparaat vergeten?"; then
+        f|F)
+            if menu_confirm "Forget this device?"; then
                 cmd_forget "$mac"
                 pause_enter
             fi ;;
     esac
 }
 
-# Lijst met bekende apparaten, met keuze voor details.
+# List of known devices, with a choice for details.
 menu_devices() {
     while true; do
         clear 2>/dev/null
         cmd_list
         [ -s "$KNOWN" ] || { pause_enter; return; }
-        printf '\nNummer of MAC-adres voor details (Enter = terug): '
+        printf '\nNumber or MAC address for details (Enter = back): '
         read -r sel || return
         [ -z "$sel" ] && return
         menu_device_detail "$sel"
     done
 }
 
-menu_forget() {
-    cmd_list
-    [ -s "$KNOWN" ] || return
-    printf '\nNummer of MAC-adres om te vergeten (leeg = annuleren): '
-    read -r sel || return
-    [ -z "$sel" ] && return
-    mac="$(resolve_device "$sel")"
-    [ -z "$mac" ] && { echo "Ongeldige keuze."; return; }
-    cmd_forget "$mac"
-}
-
 menu_interval() {
-    echo "Huidig interval: $INTERVAL min"
-    printf 'Nieuw interval in minuten (1-59, leeg = annuleren): '
+    echo "Current interval: $INTERVAL min"
+    printf 'New interval in minutes (1-59, empty = cancel): '
     read -r n || return
     [ -z "$n" ] && return
     case "$n" in
-        *[!0-9]*) echo "Geen geldig getal."; return ;;
+        *[!0-9]*) echo "Not a valid number."; return ;;
     esac
     if [ "$n" -lt 1 ] || [ "$n" -gt 59 ]; then
-        echo "Kies een waarde tussen 1 en 59."
+        echo "Choose a value between 1 and 59."
         return
     fi
     INTERVAL="$n"
     save_conf
-    log "Interval ingesteld op $INTERVAL min."
+    log "Interval set to $INTERVAL min."
     if cron_active; then
         cmd_cron
-        echo "Cronjob bijgewerkt."
+        echo "Cron job updated."
     else
-        echo "Opgeslagen. De cronjob is nog niet actief; kies 'i' om te installeren."
+        echo "Saved. The cron job is not active yet; press i in the main menu to install it."
     fi
 }
 
-menu_confirm() {
-    printf '%s (j/N): ' "$1"
-    read -r a || return 1
-    case "$a" in j|J|y|Y) return 0 ;; *) return 1 ;; esac
+menu_update_mail() {
+    if [ "$UPDATE_MAIL" = "1" ]; then UPDATE_MAIL=0; txt="off"; else UPDATE_MAIL=1; txt="on"; fi
+    save_conf
+    log "Email for new versions: $txt."
+    echo "Email for new versions is now $txt."
+}
+
+menu_settings() {
+    while true; do
+        clear 2>/dev/null
+        echo "=============================================================="
+        printf '  %sSettings%s\n' "$C_B" "$C_X"
+        echo "=============================================================="
+        if [ "$UPDATE_MAIL" = "1" ]; then um="on"; else um="off"; fi
+        mi i "Check interval (now: $INTERVAL min)"
+        mi n "Email me when a new version is available (now: $um)"
+        mi b "Back"
+        echo
+        printf '  Choice: '
+        read -r sc || return
+        echo
+        case "$sc" in
+            i|I) menu_interval; pause_enter ;;
+            n|N) menu_update_mail; pause_enter ;;
+            b|B|"") return ;;
+            *) echo "Unknown choice."; pause_enter ;;
+        esac
+    done
 }
 
 cmd_menu() {
@@ -974,64 +1164,66 @@ cmd_menu() {
     touch "$KNOWN"
     while true; do
         menu_header
-        if [ "$UPDATE_MAIL" = "1" ]; then um="aan"; else um="uit"; fi
-        printf '  %-38s %s\n' "1) Controle nu uitvoeren"          "9) Controleren op updates"
-        printf '  %-38s %s\n' "2) Verbonden apparaten tonen"      "g) Mail bij update aan/uit (nu: $um)"
-        printf '  %-38s %s\n' "3) Bekende apparaten en details"   "r) Vorige versie terugzetten"
-        printf '  %-38s %s\n' "4) Log lezen"                      "i) Installeren (cron + opstarthook)"
-        printf '  %-38s %s\n' "5) Testmail versturen"             "u) Verwijderen (cron + opstarthook)"
-        printf '  %-38s %s\n' "6) Alles nu verbonden als bekend"  "e) Afsluiten (terug naar amtm)"
-        printf '  %-38s\n'    "7) Apparaat vergeten"
-        printf '  %-38s\n'    "8) Controle-interval ($INTERVAL min)"
+        mi c "Check for new devices now"
+        mi v "View connected devices"
+        mi d "Known devices and details"
+        mi f "Forget a device"
+        mi m "Mark all connected devices as known"
+        mi l "Read the log"
+        mi t "Send a test email"
+        mi s "Settings"
+        mi u "Update (check and install)"
+        mi p "Restore the previous version"
+        mi i "Install cron jobs and startup hook"
+        mi r "Remove cron jobs and startup hook"
+        mi e "Exit (back to amtm)"
         echo
-        printf '  Keuze: '
+        printf '  Choice: '
         read -r choice || break
         echo
         case "$choice" in
-            1)
+            c|C)
                 cmd_run
                 if [ "$NEW_COUNT" -eq 0 ]; then
-                    echo "Controle klaar: geen nieuwe apparaten."
+                    echo "Check done: no new devices."
                 elif [ "$SENT_OK" -eq 1 ]; then
-                    echo "Controle klaar: $NEW_COUNT nieuw(e) apparaat/apparaten gemeld."
+                    echo "Check done: reported $NEW_COUNT new device(s)."
                 else
-                    echo "Controle klaar: $NEW_COUNT nieuw, maar de mail is niet verstuurd (zie log)."
+                    echo "Check done: $NEW_COUNT new, but the email was not sent (see the log)."
                 fi
                 pause_enter ;;
-            2) cmd_connected; pause_enter ;;
-            3) menu_devices ;;
-            4) cmd_log 40; pause_enter ;;
-            5)
-                echo "Testmail versturen..."
-                cmd_test && echo "Testmail verstuurd. Controleer je inbox."
-                pause_enter ;;
-            6)
-                if menu_confirm "Alle nu verbonden apparaten stil als bekend markeren?"; then
+            v|V) cmd_connected; pause_enter ;;
+            d|D) menu_devices ;;
+            f|F) menu_forget; pause_enter ;;
+            m|M)
+                if menu_confirm "Mark all currently connected devices as known without a notification?"; then
                     cmd_baseline
                 fi
                 pause_enter ;;
-            7) menu_forget; pause_enter ;;
-            8) menu_interval; pause_enter ;;
-            9)
+            l|L) cmd_log 40; pause_enter ;;
+            t|T)
+                echo "Sending test email..."
+                cmd_test && echo "Test email sent. Check your inbox."
+                pause_enter ;;
+            s|S) menu_settings ;;
+            u|U)
                 UPDATED=0
                 cmd_update
                 pause_enter
                 [ "$UPDATED" = "1" ] && break ;;
-            g|G) menu_update_mail; pause_enter ;;
-            r|R)
-                UPDATED=0
+            p|P)
                 cmd_rollback
                 pause_enter
                 [ "$UPDATED" = "1" ] && break ;;
             i|I) cmd_install; pause_enter ;;
-            u|U)
-                if menu_confirm "Cronjob en opstarthook verwijderen?"; then
+            r|R)
+                if menu_confirm "Remove the cron jobs and the startup hook?"; then
                     cmd_uninstall
                 fi
                 pause_enter ;;
             e|E|q|Q|0) break ;;
             "") ;;
-            *) echo "Onbekende keuze."; pause_enter ;;
+            *) echo "Unknown choice."; pause_enter ;;
         esac
     done
     clear 2>/dev/null
@@ -1056,5 +1248,5 @@ case "$1" in
     "")
         if [ -t 0 ] && [ -t 1 ]; then cmd_menu; else cmd_status; fi ;;
     status|help|-h|--help) cmd_status ;;
-    *)         echo "Onbekende opdracht: $1"; cmd_status; exit 1 ;;
+    *)         echo "Unknown command: $1"; cmd_status; exit 1 ;;
 esac
