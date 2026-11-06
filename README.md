@@ -74,6 +74,10 @@ Open Settings (`s`), press `r`, then delete `/jffs/scripts/newdevmon.sh` and `/j
 
 ## Changelog
 
+### 0.1.13
+- After a failed email the script waits 30 minutes before trying again (no more retry every minute); a manual check (menu 1) ignores the pause and the dashboard shows the pause
+- Removed the test override for the update source: the repository is now fixed in the script
+
 ### 0.1.12
 - Settings menu shows the same header/dashboard as the main menu; title is now "New Device Monitor"
 
