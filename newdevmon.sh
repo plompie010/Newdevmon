@@ -35,7 +35,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 ###############################################################################
 
-VERSION="0.1.17"
+VERSION="0.1.18"
 SCRIPT_NAME="newdevmon"
 SCRIPT_PATH="${NEWDEVMON_SCRIPT_PATH:-/jffs/scripts/newdevmon.sh}"
 DATA_DIR="${NEWDEVMON_DIR:-/jffs/addons/newdevmon}"
@@ -180,7 +180,7 @@ nmp_info() {
 # mac|node_mac|band|rssi|ip   (band: 2G_1, 5G_1, wired_mac, ...)
 link_info() {
     [ -r "$CLIENTLIST_FILE" ] || return 1
-    tr -d '\r\n' < "$CLIENTLIST_FILE" | awk '
+    tr -d '\r\n' < "$CLIENTLIST_FILE" | awk -v all="$1" '
         function leaf(k, v,   mac, p, kk) {
             if (depth < 3 || (k != "ip" && k != "rssi")) return
             mac = tolower(stack[depth])
@@ -223,10 +223,11 @@ link_info() {
                 best = ""; bs = -1
                 for (j = 1; j <= np[m]; j++) {
                     kk = m SUBSEP pl[m, j]
+                    if (all == "all") print m "|" nd[kk] "|" bnd[kk] "|" rssi[kk] "|" ip[kk]
                     sc = ((rssi[kk] != "" && rssi[kk] != "0") ? 4 : 0) + ((bnd[kk] !~ /^wired/) ? 2 : 0)
                     if (sc > bs) { bs = sc; best = kk }
                 }
-                print m "|" nd[best] "|" bnd[best] "|" rssi[best] "|" ip[best]
+                if (all != "all") print m "|" nd[best] "|" bnd[best] "|" rssi[best] "|" ip[best]
             }
         }'
 }
@@ -787,6 +788,33 @@ EOF
     fi
 }
 
+# Shows the raw router data about one device (to find out why Link/Node is wrong).
+cmd_debug() {
+    dmac="$(resolve_device "$1")"
+    [ -z "$dmac" ] && { echo "Usage: $0 debug NR|MAC"; return 1; }
+    echo "== Debug for $dmac (newdevmon $VERSION) =="
+    echo
+    echo "-- Asus per-band list ($CLIENTLIST_FILE): every place where this MAC occurs"
+    echo "   format: mac|node|band|rssi|ip"
+    if [ -r "$CLIENTLIST_FILE" ]; then
+        link_info all 2>/dev/null | awk -F'|' -v m="$dmac" '$1 == m'
+        echo "   (raw, around the MAC:)"
+        tr -d '\r\n' < "$CLIENTLIST_FILE" | grep -oi ".\{0,120\}$dmac.\{0,160\}" | head -n 6
+    else
+        echo "   file not found"
+    fi
+    echo
+    echo "-- Asus network map ($NMP_FILE)"
+    if [ -r "$NMP_FILE" ]; then
+        tr -d '\r\n' < "$NMP_FILE" | sed 's/},"/}\n"/g' | grep -i "\"mac\":\"$dmac\"" | head -n 2
+    else
+        echo "   file not found"
+    fi
+    echo
+    echo "-- Router and node names"
+    node_labels
+}
+
 cmd_log() {
     n="${1:-40}"
     if [ -s "$LOGFILE" ]; then
@@ -1057,7 +1085,7 @@ cmd_status() {
     echo "Known devices:     $(known_count)"
     [ "$DRY_RUN" = "1" ] && echo "Mode:              DRY RUN (nothing is sent)"
     echo
-    echo "Commands: menu | run | cron | install | uninstall | baseline | test | list | detail NR|MAC | log | forget MAC"
+    echo "Commands: menu | run | cron | install | uninstall | baseline | test | list | detail NR|MAC | debug NR|MAC | log | forget MAC"
     echo "          update-check | update [-y] | rollback"
 }
 
@@ -1354,6 +1382,7 @@ case "$1" in
     test)      cmd_test ;;
     list)      cmd_list ;;
     detail)    cmd_detail "$2" ;;
+    debug)     cmd_debug "$2" ;;
     log)       cmd_log "$2" ;;
     forget)    cmd_forget "$2" ;;
     install)   cmd_install ;;
