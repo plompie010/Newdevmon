@@ -6,7 +6,7 @@ Built for **Asuswrt-Merlin** routers (developed on an ASUS RT-BE86U) and meant t
 ## What it does
 
 - Checks DHCP leases and the ARP table of all LAN bridges every minute (configurable): `br0` is the main network, `br1`/`br2`/... are guest networks.
-- A device is "new" when its MAC address has never been seen before. The first run reports everything; use "Mark all connected devices as known" to start silently.
+- A device is "new" when its MAC address has never been seen before. The first run reports everything; use Settings > `m` ("Mark all connected devices as known") to start silently.
 - All new devices found in one check are reported in a single email.
 - Uses the email settings you already configured in amtm (`amtm > em`). No extra credentials.
 - Shows names, vendor, band, signal strength and AiMesh node from the Asus client lists when available.
@@ -29,22 +29,21 @@ chmod 755 /jffs/scripts/newdevmon.sh
 Then start `amtm`, press `p`, and pick `newdevmon.sh`. In the menu choose:
 
 1. `s` then `t` to send a test email
-2. `m` to mark the devices currently connected as known (optional)
+2. `s` then `m` to mark the devices currently connected as known without an email (optional)
 3. `s` then `i` to install the cron jobs and the startup hook
 
 ## Menu
 
 | Key | Action |
 |-----|--------|
-| `c` | **C**heck for new devices now |
-| `v` | **V**iew connected devices (with band and signal) |
-| `d` | Known **d**evices and details |
-| `f` | **F**orget a device (it will be reported again) |
-| `m` | **M**ark all connected devices as known |
+| `1` | Check for new devices now |
+| `2` | View connected devices (with band and signal) |
+| `3` | Known devices and details |
+| `4` | Forget a device (it will be reported again) |
 | `s` | **S**ettings and maintenance (see below) |
 | `e` | **E**xit |
 
-Settings submenu: `f` check **f**requency, `n` **n**otify by email about new versions, `l` read the **l**og, `t` send a **t**est email, `u` **u**pdate, `p` restore the **p**revious version, `i` **i**nstall cron jobs and startup hook, `r` **r**emove them, `b` back.
+Settings submenu: `f` check **f**requency, `n` **n**otify by email about new versions, `m` **m**ark all connected devices as known (no email is sent), `l` read the **l**og, `t` send a **t**est email, `u` **u**pdate, `p` restore the **p**revious version, `i` **i**nstall cron jobs and startup hook, `r` **r**emove them, `b` back.
 
 Command line: `newdevmon.sh [menu|run|cron|install|uninstall|baseline|test|list|detail NR|MAC|log|forget MAC|update-check|update [-y]|rollback]`
 
@@ -76,6 +75,15 @@ Open Settings (`s`), press `r`, then delete `/jffs/scripts/newdevmon.sh` and `/j
 - **Update says latest version**: the `VERSION` in the repository must be higher than the installed one.
 
 ## Changelog
+
+### 0.1.8
+- Added a note to the script header that the code was written with the help of Claude AI
+
+### 0.1.7
+- "Mark all connected devices as known" moved to Settings (`m`) with a note that no email is sent
+
+### 0.1.6
+- Main menu actions are numbered 1-5; `s` (Settings) and `e` (Exit) keep letters
 
 ### 0.1.5
 - Update screen shows the changelog of the new versions (from README.md) instead of a line count
