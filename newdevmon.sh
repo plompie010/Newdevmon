@@ -35,7 +35,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 ###############################################################################
 
-VERSION="0.1.12"
+VERSION="0.1.13"
 SCRIPT_NAME="newdevmon"
 SCRIPT_PATH="${NEWDEVMON_SCRIPT_PATH:-/jffs/scripts/newdevmon.sh}"
 DATA_DIR="${NEWDEVMON_DIR:-/jffs/addons/newdevmon}"
@@ -69,6 +69,8 @@ case "$INTERVAL" in ''|*[!0-9]*) INTERVAL=1 ;; esac
 STATE_DIR="${NEWDEVMON_STATE_DIR:-/tmp}"
 SEEN="$STATE_DIR/newdevmon.seen"             # mac|last_seen_epoch|ip|name|network
 LASTRUN="$STATE_DIR/newdevmon.lastrun"       # epoch of the last check
+MAILFAIL="$STATE_DIR/newdevmon.mailfail"      # epoch of the last failed new-device email
+MAIL_RETRY_SECS=1800                         # pause after a failed email
 PERSIST_TS="$STATE_DIR/newdevmon.persist"    # epoch of the last write to JFFS
 NMP_FILE="${NEWDEVMON_NMP:-/jffs/nmp_cl_json.js}"                 # Asus client list (network map)
 CLIENTLIST_FILE="${NEWDEVMON_CLIENTLIST:-/tmp/clientlist.json}"   # Asus per-band client list (signal)
@@ -574,12 +576,24 @@ cmd_run() {
             echo "A device in this list counts as known after this message."
         } > "$TMPBASE.final"
 
-        if send_mail "[Router] New device on the network ($count)" "$TMPBASE.final"; then
+        # After a failed email, wait before trying again (a manual check ignores the pause).
+        paused=0
+        if [ "$IGNORE_MAIL_PAUSE" != "1" ] && [ -f "$MAILFAIL" ]; then
+            lf="$(cat "$MAILFAIL" 2>/dev/null)"
+            case "$lf" in ''|*[!0-9]*) lf=0 ;; esac
+            [ $(( $(date +%s) - lf )) -lt "$MAIL_RETRY_SECS" ] && paused=1
+        fi
+
+        if [ "$paused" = "1" ]; then
+            SENT_OK=0
+        elif send_mail "[Router] New device on the network ($count)" "$TMPBASE.final"; then
+            rm -f "$MAILFAIL"
             cat "$pending" >> "$KNOWN"
             log "Reported $count new device(s): $(cut -d'|' -f1,4 "$pending" | tr '\n' ' ')"
         else
             SENT_OK=0
-            log "Message not sent; $count device(s) stay 'new' and will be retried on the next run."
+            date +%s > "$MAILFAIL"
+            log "Message not sent; $count device(s) stay 'new'. Next attempt in $((MAIL_RETRY_SECS / 60)) min."
         fi
     fi
 
@@ -850,8 +864,7 @@ save_conf() {
 }
 
 update_url() {
-    # NEWDEVMON_TEST_UPDATE_URL is for tests only (for example file://...).
-    echo "${NEWDEVMON_TEST_UPDATE_URL:-https://raw.githubusercontent.com/${UPDATE_REPO}/${UPDATE_BRANCH}/${UPDATE_FILE}}"
+    echo "https://raw.githubusercontent.com/${UPDATE_REPO}/${UPDATE_BRANCH}/${UPDATE_FILE}"
 }
 
 # ver_gt A B: succeeds (0) if version A is newer than version B (format x.y.z)
@@ -933,7 +946,7 @@ show_changelog() {
     CURL_BIN="curl"
     [ -x /usr/sbin/curl ] && CURL_BIN="/usr/sbin/curl"
     u="$(update_url)"
-    ru="${NEWDEVMON_TEST_README_URL:-${u%/*}/README.md}"
+    ru="${u%/*}/README.md"
     "$CURL_BIN" -fsSL --max-time 30 "$ru" -o "$TMPBASE.readme" 2>/dev/null || return 0
     sc=0
     first=1
@@ -1094,6 +1107,12 @@ menu_dashboard() {
     if mail_configured; then mail_txt="${C_G}configured${C_X}"; else mail_txt="${C_R}NOT configured${C_X} (amtm > em)"; fi
     printf '  %sChecking:%s   %s\n' "$C_D" "$C_X" "$ctl"
     printf '  %samtm mail:%s  %s\n' "$C_D" "$C_X" "$mail_txt"
+    if [ -f "$MAILFAIL" ]; then
+        lf="$(cat "$MAILFAIL" 2>/dev/null)"
+        case "$lf" in ''|*[!0-9]*) lf=0 ;; esac
+        left=$(( (MAIL_RETRY_SECS - (now_ep - lf) + 59) / 60 ))
+        [ "$left" -gt 0 ] && printf '  %samtm mail:%s  %slast send FAILED, retrying in %d min%s\n' "$C_D" "$C_X" "$C_R" "$left" "$C_X"
+    fi
     [ "$DRY_RUN" = "1" ] && printf '  %sMode:%s       DRY RUN\n' "$C_D" "$C_X"
     if [ -f "$UPDATE_FLAG" ]; then
         printf '  %s** UPDATE AVAILABLE: %s (Settings > u) **%s\n' "$C_Y" "$(cat "$UPDATE_FLAG")" "$C_X"
@@ -1261,7 +1280,9 @@ cmd_menu() {
         echo
         case "$choice" in
             1)
+                IGNORE_MAIL_PAUSE=1
                 cmd_run
+                IGNORE_MAIL_PAUSE=0
                 if [ "$NEW_COUNT" -eq 0 ]; then
                     echo "Check done: no new devices."
                 elif [ "$SENT_OK" -eq 1 ]; then
