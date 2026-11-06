@@ -11,6 +11,8 @@ Ontwikkeld en getest op een ASUS RT-BE86U.
 - Stuurt één e-mail per controle met alle nieuwe apparaten, gesorteerd per netwerk: naam, MAC-adres, IP-adres, netwerk en tijdstip.
 - Gebruikt de e-mailinstellingen die je al in amtm hebt ingesteld (`amtm` > `em`). Er is geen apart account of wachtwoord nodig.
 - Herkent privé/willekeurige MAC-adressen (iPhone, Android, Windows) en markeert die in de mail.
+- Toont bovenaan het menu een dashboard: aantal apparaten per netwerk (bekend en online), het nieuwste apparaat en wanneer de laatste controle draaide.
+- Bewaart per apparaat wanneer het voor het eerst en voor het laatst gezien is.
 - Controleert dagelijks of er een nieuwere versie op GitHub staat en installeert die alleen na jouw bevestiging.
 
 ## Vereisten
@@ -45,8 +47,8 @@ Start het script zonder argumenten in een SSH-sessie (of via amtm):
 | Optie | Doet |
 |---|---|
 | `1` | Controle nu uitvoeren |
-| `2` | Nu verbonden apparaten tonen (nieuwe apparaten gemarkeerd) |
-| `3` | Bekende apparaten tonen, gegroepeerd per netwerk |
+| `2` | Verbonden apparaten tonen, per netwerk (nieuwe apparaten gemarkeerd) |
+| `3` | Bekende apparaten tonen, per netwerk, met online-status en wanneer ze voor het laatst gezien zijn |
 | `4` | Log lezen |
 | `5` | Testmail versturen |
 | `6` | Alle nu verbonden apparaten als bekend markeren |
@@ -70,6 +72,12 @@ newdevmon.sh [menu|run|cron|install|uninstall|baseline|test|list|log|forget MAC|
 Het script leest de DHCP-leases (`/var/lib/misc/dnsmasq.leases`) en de ARP-tabel (`/proc/net/arp`) en voegt die samen op MAC-adres. Het netwerk volgt uit de bridge van het apparaat. Bekende apparaten staan in `/jffs/addons/newdevmon/known_devices.txt`; instellingen en log staan in dezelfde map.
 
 Mislukt het versturen van de mail, dan blijven de apparaten "nieuw" en probeert het script het bij de volgende controle opnieuw.
+
+## Laatst gezien en online
+
+De status "online" komt uit de clientlijst van Asus zelf (`/jffs/nmp_cl_json.js`, dezelfde bron als het netwerkoverzicht in de router). De leases en de ARP-tabel zijn hiervoor niet betrouwbaar, omdat daar ook apparaten in blijven staan die al weg zijn. Ontbreekt het Asus-bestand, dan telt alles in de leases en de ARP-tabel als gezien, en is de status minder nauwkeurig.
+
+Het laatst-gezien-tijdstip wordt bijgehouden in het geheugen (`/tmp`) en één keer per uur naar `/jffs/addons/newdevmon/known_devices.txt` geschreven, alleen als er iets veranderd is. Zo wordt de flash van de router niet elke minuut beschreven. Na een herstart van de router blijft dus het laatste uurlijkse tijdstip bewaard.
 
 ## Beperkingen
 
@@ -101,6 +109,11 @@ rm -r /jffs/addons/newdevmon
 - **Testmail mislukt.** Controleer eerst of de testmail in amtm zelf werkt (`amtm` > `em` > 11). Het script gebruikt dezelfde instellingen. Zie anders het log (optie `4`).
 - **Er komt geen melding.** Kijk bij optie `2` of het apparaat in de lijst staat, en bij optie `3` of het al als bekend is opgeslagen.
 - **Cronjob verdwenen na een herstart.** Draai optie `i` opnieuw. Dit zet de regel in `/jffs/scripts/services-start`.
+
+## Wijzigingen
+
+- **0.1.1**: dashboard bovenaan het menu, kleur in het menu en de overzichten, twee kolommen in het menu, en eerst en laatst gezien per apparaat met online-status.
+- **0.1**: eerste versie.
 
 
 ## Licentie
