@@ -74,6 +74,9 @@ Open Settings (`s`), press `r`, then delete `/jffs/scripts/newdevmon.sh` and `/j
 
 ## Changelog
 
+### 0.1.17
+- Fixed the banner on busybox awk (no `%*s` support)
+
 ### 0.1.16
 - Exit splash screen ("Thanks for using New Device Monitor") instead of an empty screen
 
