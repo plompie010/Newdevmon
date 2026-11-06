@@ -11,7 +11,7 @@
 #
 # Zonder argumenten in een SSH-sessie (bijvoorbeeld vanuit amtm, optie p)
 # opent het menu. Voor gebruik in scripts/cron:
-#   newdevmon.sh [menu|run|cron|install|uninstall|baseline|test|list|log|forget MAC]
+#   newdevmon.sh [menu|run|cron|install|uninstall|baseline|test|list|detail NR|MAC|log|forget MAC]
 #   newdevmon.sh [update-check|update [-y]|rollback]
 #
 # Updates: het script controleert dagelijks of er in de GitHub-repo
@@ -33,7 +33,7 @@
 # programma; zo niet, zie <https://www.gnu.org/licenses/>.
 ###############################################################################
 
-VERSION="0.1.1"
+VERSION="0.1.2"
 SCRIPT_NAME="newdevmon"
 SCRIPT_PATH="${NEWDEVMON_SCRIPT_PATH:-/jffs/scripts/newdevmon.sh}"
 DATA_DIR="${NEWDEVMON_DIR:-/jffs/addons/newdevmon}"
@@ -550,6 +550,42 @@ cmd_connected() {
     rm -f "$TMPBASE".*
 }
 
+# resolve_device NR_OF_MAC: geeft het MAC-adres bij een nummer uit de lijst (of het MAC zelf).
+resolve_device() {
+    case "$1" in
+        '') return 0 ;;
+        *[!0-9]*) echo "$1" | tr 'A-F' 'a-f' ;;
+        *) [ "$1" -ge 1 ] && sed -n "${1}p" "$KNOWN" | cut -d'|' -f1 ;;
+    esac
+}
+
+# Alle bekende gegevens van één apparaat.
+cmd_detail() {
+    dmac="$(resolve_device "$1")"
+    if [ -z "$dmac" ] || ! is_known "$dmac"; then
+        echo "Apparaat niet gevonden: ${1:-(geen invoer)}"
+        return 1
+    fi
+    joined_known | awk -F'|' -v m="$dmac" -v now="$(date +%s)" \
+        -v G="$C_G" -v R="$C_R" -v D="$C_D" -v B="$C_B" -v X="$C_X" "$AWK_FN"'
+        $5 == m {
+            nm = ($8 == "") ? "onbekend" : $8
+            priv = (substr($5, 2, 1) ~ /[26ae]/)
+            printf "%s== %s ==%s\n\n", B, nm, X
+            printf "  %-15s %s\n", "Naam:", nm
+            printf "  %-15s %s%s\n", "MAC-adres:", $5, (priv ? "  (privé/willekeurig adres)" : "")
+            printf "  %-15s %s\n", "IP-adres:", ($7 == "" ? "onbekend" : $7)
+            printf "  %-15s %s\n", "Netwerk:", $9
+            if ($11 == 1) st = G "online" X; else st = R "offline" X
+            printf "  %-15s %s\n", "Status:", st
+            if ($10 + 0 > 0) ls = ($11 == 1) ? "nu" : ago($10, now); else ls = "nog niet online gezien"
+            printf "  %-15s %s\n", "Laatst gezien:", ls
+            printf "  %-15s %s\n", "Bekend sinds:", $6
+            printf "  %-15s %d\n", "Nr. in lijst:", $4
+            if (priv) printf "\n  %sEen privé-adres kan per netwerk of na een reset veranderen.\n  Hetzelfde apparaat verschijnt dan opnieuw als nieuw.%s\n", D, X
+        }'
+}
+
 cmd_log() {
     n="${1:-40}"
     if [ -s "$LOGFILE" ]; then
@@ -791,7 +827,7 @@ cmd_status() {
     echo "Bekende apparaten: $(known_count)"
     [ "$DRY_RUN" = "1" ] && echo "Modus:             DRY RUN (er wordt niets verstuurd)"
     echo
-    echo "Opdrachten: menu | run | cron | install | uninstall | baseline | test | list | log | forget MAC"
+    echo "Opdrachten: menu | run | cron | install | uninstall | baseline | test | list | detail NR|MAC | log | forget MAC"
     echo "            update-check | update [-y] | rollback"
 }
 
@@ -863,16 +899,43 @@ menu_update_mail() {
     echo "Mail bij nieuwe versie staat nu $txt."
 }
 
+# Detailscherm van één apparaat met acties.
+menu_device_detail() {
+    clear 2>/dev/null
+    cmd_detail "$1" || { pause_enter; return; }
+    mac="$(resolve_device "$1")"
+    echo
+    printf '  v) Vergeten (opnieuw laten melden)    Enter) terug: '
+    read -r act || return
+    case "$act" in
+        v|V)
+            if menu_confirm "Dit apparaat vergeten?"; then
+                cmd_forget "$mac"
+                pause_enter
+            fi ;;
+    esac
+}
+
+# Lijst met bekende apparaten, met keuze voor details.
+menu_devices() {
+    while true; do
+        clear 2>/dev/null
+        cmd_list
+        [ -s "$KNOWN" ] || { pause_enter; return; }
+        printf '\nNummer of MAC-adres voor details (Enter = terug): '
+        read -r sel || return
+        [ -z "$sel" ] && return
+        menu_device_detail "$sel"
+    done
+}
+
 menu_forget() {
     cmd_list
     [ -s "$KNOWN" ] || return
     printf '\nNummer of MAC-adres om te vergeten (leeg = annuleren): '
     read -r sel || return
     [ -z "$sel" ] && return
-    case "$sel" in
-        *[!0-9]*) mac="$sel" ;;
-        *)        mac="$(sed -n "${sel}p" "$KNOWN" | cut -d'|' -f1)" ;;
-    esac
+    mac="$(resolve_device "$sel")"
     [ -z "$mac" ] && { echo "Ongeldige keuze."; return; }
     cmd_forget "$mac"
 }
@@ -914,7 +977,7 @@ cmd_menu() {
         if [ "$UPDATE_MAIL" = "1" ]; then um="aan"; else um="uit"; fi
         printf '  %-38s %s\n' "1) Controle nu uitvoeren"          "9) Controleren op updates"
         printf '  %-38s %s\n' "2) Verbonden apparaten tonen"      "g) Mail bij update aan/uit (nu: $um)"
-        printf '  %-38s %s\n' "3) Bekende apparaten tonen"        "r) Vorige versie terugzetten"
+        printf '  %-38s %s\n' "3) Bekende apparaten en details"   "r) Vorige versie terugzetten"
         printf '  %-38s %s\n' "4) Log lezen"                      "i) Installeren (cron + opstarthook)"
         printf '  %-38s %s\n' "5) Testmail versturen"             "u) Verwijderen (cron + opstarthook)"
         printf '  %-38s %s\n' "6) Alles nu verbonden als bekend"  "e) Afsluiten (terug naar amtm)"
@@ -936,7 +999,7 @@ cmd_menu() {
                 fi
                 pause_enter ;;
             2) cmd_connected; pause_enter ;;
-            3) cmd_list; pause_enter ;;
+            3) menu_devices ;;
             4) cmd_log 40; pause_enter ;;
             5)
                 echo "Testmail versturen..."
@@ -981,6 +1044,7 @@ case "$1" in
     baseline)  cmd_baseline ;;
     test)      cmd_test ;;
     list)      cmd_list ;;
+    detail)    cmd_detail "$2" ;;
     log)       cmd_log "$2" ;;
     forget)    cmd_forget "$2" ;;
     install)   cmd_install ;;
