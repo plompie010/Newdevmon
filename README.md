@@ -74,6 +74,9 @@ Open Settings (`s`), press `r`, then delete `/jffs/scripts/newdevmon.sh` and `/j
 
 ## Changelog
 
+### 0.1.11
+- Devices list: MAC column removed (still in the detail screen), Node column added (router or AiMesh node the device is connected to)
+
 ### 0.1.10
 - A new device with a private MAC address and the same name as a known device is flagged in the email ("Similar to: ...") and in the detail screen ("Same name as: ...")
 - Link column no longer flips between wired and Wi-Fi: the Wi-Fi entry with a signal value wins
