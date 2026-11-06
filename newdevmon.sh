@@ -33,7 +33,7 @@
 # programma; zo niet, zie <https://www.gnu.org/licenses/>.
 ###############################################################################
 
-VERSION="0.1"
+VERSION="0.1.1"
 SCRIPT_NAME="newdevmon"
 SCRIPT_PATH="${NEWDEVMON_SCRIPT_PATH:-/jffs/scripts/newdevmon.sh}"
 DATA_DIR="${NEWDEVMON_DIR:-/jffs/addons/newdevmon}"
@@ -62,6 +62,45 @@ UPDATE_FILE="newdevmon.sh"
 case "$INTERVAL" in ''|*[!0-9]*) INTERVAL=1 ;; esac
 [ "$INTERVAL" -lt 1 ] && INTERVAL=1
 [ "$INTERVAL" -gt 59 ] && INTERVAL=59
+
+# Vluchtige status in het RAM (/tmp), zodat de flash niet elke minuut beschreven wordt.
+STATE_DIR="${NEWDEVMON_STATE_DIR:-/tmp}"
+SEEN="$STATE_DIR/newdevmon.seen"             # mac|laatst_gezien_epoch|ip|naam|netwerk
+LASTRUN="$STATE_DIR/newdevmon.lastrun"       # epoch van de laatste controle
+PERSIST_TS="$STATE_DIR/newdevmon.persist"    # epoch van de laatste opslag naar JFFS
+NMP_FILE="${NEWDEVMON_NMP:-/jffs/nmp_cl_json.js}"   # clientlijst van Asus (netwerkoverzicht)
+
+# Kleuren alleen in een terminal (niet in cron, logs of mail).
+USE_COLOR=0
+if [ "$NEWDEVMON_FORCE_COLOR" = "1" ]; then
+    USE_COLOR=1
+elif [ -t 1 ] && [ -z "$NO_COLOR" ]; then
+    USE_COLOR=1
+fi
+if [ "$USE_COLOR" = "1" ]; then
+    C_G="$(printf '\033[32m')"; C_R="$(printf '\033[31m')"; C_Y="$(printf '\033[33m')"
+    C_D="$(printf '\033[2m')";  C_B="$(printf '\033[1m')";  C_X="$(printf '\033[0m')"
+else
+    C_G=""; C_R=""; C_Y=""; C_D=""; C_B=""; C_X=""
+fi
+
+# awk-hulpfuncties die in meerdere overzichten gebruikt worden.
+AWK_FN='
+function label(d) {
+    if (d == "br0") return "Hoofdnetwerk"
+    if (d ~ /^br/) return "Gastnetwerk (" d ")"
+    if (d == "") return "Onbekend netwerk"
+    return "Netwerk (" d ")"
+}
+function trunc(s, n) { return (length(s) > n) ? substr(s, 1, n - 1) "~" : s }
+function ago(ep, now,   d) {
+    if (ep <= 0) return "-"
+    d = now - ep; if (d < 0) d = 0
+    if (d < 3600) return int(d / 60) " min geleden"
+    if (d < 86400) return int(d / 3600) " u geleden"
+    return int(d / 86400) " d geleden"
+}
+'
 
 ###############################################################################
 # Hulpfuncties
@@ -152,6 +191,120 @@ is_random_mac() {
 known_count() { if [ -f "$KNOWN" ]; then wc -l < "$KNOWN"; else echo 0; fi; }
 
 is_known() { grep -qi "^${1}|" "$KNOWN" 2>/dev/null; }
+
+# Apparaten die Asus zelf als online ziet (netwerkoverzicht), als kleine letters.
+# Geeft niets en returncode 1 als het bestand ontbreekt.
+online_macs() {
+    [ -r "$NMP_FILE" ] || return 1
+    grep -Eo '"mac":"[0-9A-Fa-f:]{17}"[^{}]*"online":[01]' "$NMP_FILE" \
+        | sed -n 's/^"mac":"\([^"]*\)".*"online":1$/\1/p' | tr 'A-F' 'a-f'
+    return 0
+}
+
+# update_seen SCANBESTAND: bewaart per apparaat wanneer het voor het laatst online was.
+# Bron voor "online": de clientlijst van Asus. Ontbreekt die, dan geldt alles wat in
+# de leases of ARP-tabel staat als gezien (minder nauwkeurig).
+update_seen() {
+    ts="$(date +%s)"
+    [ -f "$SEEN" ] || : > "$SEEN"
+    have_online=0
+    if online_macs > "$TMPBASE.online" 2>/dev/null && [ -r "$NMP_FILE" ]; then
+        have_online=1
+    else
+        : > "$TMPBASE.online"
+    fi
+    awk -F'|' -v ts="$ts" -v have="$have_online" "$AWK_FN"'
+        FILENAME == ARGV[1] {
+            if ($1 != "") { m[$1] = 1; ep[$1] = $2; ip[$1] = $3; nm[$1] = $4; lb[$1] = $5; ord[++n] = $1 }
+            next
+        }
+        FILENAME == ARGV[2] {
+            if ($1 == "") next
+            if (!($1 in m)) { m[$1] = 1; ord[++n] = $1 }
+            insc[$1] = 1
+            if ($2 != "") ip[$1] = $2
+            if ($3 != "") nm[$1] = $3
+            l = label($4)
+            if (l != "Onbekend netwerk" || lb[$1] == "") lb[$1] = l
+            next
+        }
+        {
+            if ($1 == "") next
+            if (!($1 in m)) { m[$1] = 1; ord[++n] = $1 }
+            on[$1] = 1
+        }
+        END {
+            for (i = 1; i <= n; i++) {
+                k = ord[i]
+                if (have == 1) { if (k in on) ep[k] = ts } else { if (k in insc) ep[k] = ts }
+                print k "|" ep[k] "|" ip[k] "|" nm[k] "|" lb[k]
+            }
+        }
+    ' "$SEEN" "$1" "$TMPBASE.online" > "$SEEN.tmp" && mv "$SEEN.tmp" "$SEEN"
+    echo "$ts" > "$LASTRUN"
+}
+
+# Schrijft de laatst-gezien-gegevens uit het RAM terug naar het bestand met bekende
+# apparaten. Alleen als er iets veranderd is, om de flash te sparen.
+persist_seen() {
+    [ -s "$SEEN" ] && [ -s "$KNOWN" ] || return 0
+    awk -F'|' -v OFS='|' '
+        FILENAME == ARGV[1] { ep[$1] = $2; ip[$1] = $3; nm[$1] = $4; lb[$1] = $5; next }
+        {
+            m = $1
+            if (m in ep) {
+                if (ip[m] != "") $3 = ip[m]
+                if (nm[m] != "") $4 = nm[m]
+                if (lb[m] != "") $5 = lb[m]
+                if (ep[m] + 0 > 0) $6 = ep[m]
+            }
+            print
+        }
+    ' "$SEEN" "$KNOWN" > "$TMPBASE.persist"
+    if ! cmp -s "$TMPBASE.persist" "$KNOWN" 2>/dev/null; then
+        cat "$TMPBASE.persist" > "$KNOWN"
+    fi
+    rm -f "$TMPBASE.persist"
+}
+
+persist_seen_if_due() {
+    ts="$(date +%s)"
+    last="$(cat "$PERSIST_TS" 2>/dev/null)"
+    case "$last" in ''|*[!0-9]*) last=0 ;; esac
+    if [ $((ts - last)) -ge 3600 ]; then
+        persist_seen
+        echo "$ts" > "$PERSIST_TS"
+    fi
+}
+
+# seen_epoch MAC: laatst-gezien-epoch uit het RAM, of 0.
+seen_epoch() {
+    e="$(grep -i "^${1}|" "$SEEN" 2>/dev/null | head -n 1 | cut -d'|' -f2)"
+    case "$e" in ''|*[!0-9]*) e=0 ;; esac
+    echo "$e"
+}
+
+# Bekende apparaten gecombineerd met de laatst-gezien-gegevens uit het RAM.
+# Velden: g|netwerk|ipsleutel|regelnr|mac|eerst|ip|naam|netwerk|laatst_epoch|online
+joined_known() {
+    [ -f "$SEEN" ] || : > "$SEEN"
+    awk -F'|' -v now="$(date +%s)" -v win="$((INTERVAL * 120 + 30))" '
+        FILENAME == ARGV[1] { sep[$1] = $2; sip[$1] = $3; snm[$1] = $4; slb[$1] = $5; next }
+        {
+            m = $1; ip = $3; nm = $4; lb = $5; ls = $6 + 0
+            if (m in sep) {
+                if (sep[m] + 0 > ls) ls = sep[m] + 0
+                if (sip[m] != "") ip = sip[m]
+                if (snm[m] != "") nm = snm[m]
+                if (slb[m] != "") lb = slb[m]
+            }
+            online = (ls > 0 && now - ls <= win) ? 1 : 0
+            split(ip, o, ".")
+            g = (lb ~ /^Hoofd/) ? 0 : ((lb ~ /^Gast/) ? 1 : 2)
+            printf "%d|%s|%03d%03d%03d%03d|%d|%s|%s|%s|%s|%s|%d|%d\n", g, lb, o[1], o[2], o[3], o[4], FNR, m, $2, ip, nm, lb, ls, online
+        }
+    ' "$SEEN" "$KNOWN"
+}
 
 cron_active() { cru l 2>/dev/null | grep -q "$SCRIPT_NAME"; }
 
@@ -245,6 +398,7 @@ cmd_run() {
     count=0
 
     scan_sorted > "$scanfile"
+    update_seen "$scanfile"
 
     while IFS='|' read -r mac ip host dev; do
         [ -z "$mac" ] && continue
@@ -258,7 +412,7 @@ cmd_run() {
         name="${host:-onbekend}"
         seen="$(now)"
 
-        echo "${mac}|${seen}|${ip}|${name}|${label}" >> "$pending"
+        echo "${mac}|${seen}|${ip}|${name}|${label}|$(seen_epoch "$mac")" >> "$pending"
 
         {
             echo "Naam:      $name"
@@ -298,6 +452,8 @@ cmd_run() {
         fi
     fi
 
+    persist_seen_if_due
+
     cleanup
     trap - EXIT INT TERM
 }
@@ -307,12 +463,13 @@ cmd_baseline() {
     touch "$KNOWN"
     n=0
     scan_sorted > "$TMPBASE.scan"
+    update_seen "$TMPBASE.scan"
     while IFS='|' read -r mac ip host dev; do
         [ -z "$mac" ] && continue
         is_known "$mac" && continue
         iface="$dev"
         [ -z "$iface" ] && [ -n "$ip" ] && iface="$(iface_for_ip "$ip")"
-        echo "${mac}|$(now)|${ip}|${host:-onbekend}|$(label_for_iface "$iface")" >> "$KNOWN"
+        echo "${mac}|$(now)|${ip}|${host:-onbekend}|$(label_for_iface "$iface")|$(seen_epoch "$mac")" >> "$KNOWN"
         n=$((n + 1))
     done < "$TMPBASE.scan"
     log "Baseline: $n apparaat/apparaten als bekend toegevoegd."
@@ -338,20 +495,31 @@ cmd_list() {
         echo "Nog geen bekende apparaten."
         return
     fi
-    # Gegroepeerd per netwerk (hoofdnetwerk eerst), binnen een netwerk op IP-adres.
-    # Het nummer (#) blijft het regelnummer in het bestand, zodat 'vergeten' klopt.
-    awk -F'|' '{
-        split($3, o, ".")
-        g = ($5 ~ /^Hoofd/) ? 0 : (($5 ~ /^Gast/) ? 1 : 2)
-        printf "%d|%s|%03d%03d%03d%03d|%d|%s|%s|%s|%s|%s\n", g, $5, o[1], o[2], o[3], o[4], NR, $1, $2, $3, $4, $5
-    }' "$KNOWN" | sort -t'|' -k1,1n -k2,2 -k3,3 | awk -F'|' '
-        $2 != prev {
-            if (NR > 1) print ""
-            print "== " $2 " =="
-            printf "%-3s %-18s %-20s %-15s %s\n", "#", "MAC", "Eerst gezien", "IP", "Naam"
-            prev = $2
+    # Per netwerk gegroepeerd (hoofdnetwerk eerst), binnen een netwerk op IP-adres.
+    # Het nummer (#) blijft het regelnummer in het bestand.
+    joined_known | sort -t'|' -k1,1n -k2,2 -k3,3 | awk -F'|' \
+        -v now="$(date +%s)" -v G="$C_G" -v D="$C_D" -v B="$C_B" -v X="$C_X" "$AWK_FN"'
+        {
+            n++; L[n] = $0
+            lab = $9; tot[lab]++
+            if ($11 == 1) on[lab]++
         }
-        { printf "%-3d %-18s %-20s %-15s %s\n", $4, $5, $6, $7, $8 }'
+        END {
+            prev = ""
+            for (i = 1; i <= n; i++) {
+                split(L[i], f, "|")
+                lab = f[9]
+                if (lab != prev) {
+                    if (i > 1) print ""
+                    printf "%s== %s ==%s  %d apparaten, %d online\n", B, lab, X, tot[lab], on[lab] + 0
+                    printf "%s%-3s %-16s %-15s %-17s %-10s %s%s\n", D, "#", "Naam", "IP", "MAC", "Eerst", "Laatst gezien", X
+                    prev = lab
+                }
+                if (f[11] == 1) last = G "online" X
+                else last = ago(f[10], now)
+                printf "%-3d %-16s %-15s %-17s %-10s %s\n", f[4], trunc(f[8], 16), f[7], f[5], substr(f[6], 1, 10), last
+            }
+        }'
 }
 
 cmd_connected() {
@@ -361,19 +529,24 @@ cmd_connected() {
         rm -f "$TMPBASE".*
         return
     fi
-    prev="-"
-    while IFS='|' read -r mac ip host dev; do
-        label="$(label_for_iface "$dev")"
-        if [ "$label" != "$prev" ]; then
-            [ "$prev" != "-" ] && echo
-            echo "== $label =="
-            printf '%-18s %-15s %-22s %s\n' "MAC" "IP" "Naam" ""
-            prev="$label"
-        fi
-        flag=""
-        is_known "$mac" || flag="NIEUW"
-        printf '%-18s %-15s %-22s %s\n' "$mac" "${ip:--}" "${host:-onbekend}" "$flag"
-    done < "$TMPBASE.scan"
+    [ -f "$KNOWN" ] || : > "$KNOWN"
+    awk -F'|' -v R="$C_R" -v D="$C_D" -v B="$C_B" -v X="$C_X" "$AWK_FN"'
+        FILENAME == ARGV[1] { fs[$1] = substr($2, 1, 10); next }
+        {
+            lab = label($4)
+            if (lab != prev) {
+                if (prev != "") print ""
+                printf "%s== %s ==%s\n", B, lab, X
+                printf "%s%-16s %-15s %-17s %s%s\n", D, "Naam", "IP", "MAC", "Eerst gezien", X
+                prev = lab
+            }
+            if ($1 in fs) st = fs[$1]; else { st = R "NIEUW" X; nn++ }
+            nm = ($3 == "") ? "onbekend" : $3
+            printf "%-16s %-15s %-17s %s\n", trunc(nm, 16), ($2 == "" ? "-" : $2), $1, st
+            n++
+        }
+        END { printf "\n%d apparaten in de leases/ARP-tabel, %d nieuw\n", n, nn + 0 }
+    ' "$KNOWN" "$TMPBASE.scan"
     rm -f "$TMPBASE".*
 }
 
@@ -628,21 +801,59 @@ cmd_status() {
 
 pause_enter() { printf '\nDruk op Enter om verder te gaan... '; read -r _dummy || true; }
 
+# Compact overzicht bovenaan het menu.
+menu_dashboard() {
+    if [ -s "$KNOWN" ]; then
+        joined_known | sort -t'|' -k1,1n -k2,2 | awk -F'|' -v G="$C_G" -v D="$C_D" -v X="$C_X" '
+            { lab = $9; if (!(lab in t)) ord[++n] = lab; t[lab]++; if ($11 == 1) o[lab]++ }
+            END {
+                for (i = 1; i <= n; i++) {
+                    lab = ord[i]
+                    c = (o[lab] > 0) ? G : D
+                    printf "  %-20s %3d bekend, %s%3d online%s\n", lab, t[lab], c, o[lab] + 0, X
+                }
+            }'
+        tail -n 1 "$KNOWN" | awk -F'|' -v D="$C_D" -v X="$C_X" '
+            { nm = ($4 == "") ? "onbekend" : $4
+              printf "  %sNieuwste:%s  %s (%s), %s\n", D, X, nm, $5, substr($2, 1, 16) }'
+    else
+        echo "  Nog geen bekende apparaten."
+    fi
+
+    now_ep="$(date +%s)"
+    last="$(cat "$LASTRUN" 2>/dev/null)"
+    case "$last" in ''|*[!0-9]*) last="" ;; esac
+    if cron_active; then
+        if [ -z "$last" ]; then
+            ctl="${C_G}actief${C_X}, elke $INTERVAL min; nog niet gedraaid"
+        else
+            age=$(( (now_ep - last) / 60 ))
+            limit=$(( INTERVAL * 3 )); [ "$limit" -lt 5 ] && limit=5
+            if [ "$age" -gt "$limit" ]; then
+                ctl="${C_R}laatste controle $age min geleden${C_X}"
+            else
+                ctl="${C_G}actief${C_X}, elke $INTERVAL min; laatste $age min geleden"
+            fi
+        fi
+    else
+        ctl="${C_R}NIET actief${C_X} (kies i)"
+    fi
+    if mail_configured; then mail_txt="${C_G}ingesteld${C_X}"; else mail_txt="${C_R}NIET ingesteld${C_X} (amtm > em)"; fi
+    printf '  %sControle:%s  %s\n' "$C_D" "$C_X" "$ctl"
+    printf '  %sAmtm mail:%s %s\n' "$C_D" "$C_X" "$mail_txt"
+    [ "$DRY_RUN" = "1" ] && printf '  %sModus:%s     DRY RUN\n' "$C_D" "$C_X"
+    if [ -f "$UPDATE_FLAG" ]; then
+        printf '  %s** UPDATE BESCHIKBAAR: %s (kies 9) **%s\n' "$C_Y" "$(cat "$UPDATE_FLAG")" "$C_X"
+    fi
+}
+
 menu_header() {
     clear 2>/dev/null
-    echo "======================================================"
-    echo "  newdevmon $VERSION - nieuwe apparaten melden per e-mail"
-    echo "======================================================"
-    if cron_active; then cron_txt="actief, elke $INTERVAL min"; else cron_txt="NIET actief"; fi
-    if mail_configured; then mail_txt="ingesteld"; else mail_txt="NIET ingesteld (amtm > em)"; fi
-    echo "  Controle:  $cron_txt"
-    echo "  amtm mail: $mail_txt"
-    echo "  Bekend:    $(known_count) apparaten"
-    [ "$DRY_RUN" = "1" ] && echo "  Modus:     DRY RUN"
-    if [ -f "$UPDATE_FLAG" ]; then
-        echo "  ** UPDATE BESCHIKBAAR: $(cat "$UPDATE_FLAG") (kies 9) **"
-    fi
-    echo "------------------------------------------------------"
+    echo "=============================================================="
+    printf '  %snewdevmon %s%s - nieuwe apparaten melden\n' "$C_B" "$VERSION" "$C_X"
+    echo "=============================================================="
+    menu_dashboard
+    echo "--------------------------------------------------------------"
 }
 
 menu_update_mail() {
@@ -700,21 +911,15 @@ cmd_menu() {
     touch "$KNOWN"
     while true; do
         menu_header
-        echo "  1) Controle nu uitvoeren"
-        echo "  2) Nu verbonden apparaten tonen"
-        echo "  3) Bekende apparaten tonen"
-        echo "  4) Log lezen"
-        echo "  5) Testmail versturen"
-        echo "  6) Alle nu verbonden apparaten als bekend markeren"
-        echo "  7) Apparaat vergeten (opnieuw laten melden)"
-        echo "  8) Controle-interval wijzigen"
-        echo "  9) Controleren op updates (en installeren)"
         if [ "$UPDATE_MAIL" = "1" ]; then um="aan"; else um="uit"; fi
-        echo "  g) Mail bij nieuwe versie aan/uit (nu: $um)"
-        echo "  r) Vorige versie terugzetten"
-        echo "  i) Installeren (cronjob + opstarthook)"
-        echo "  u) Verwijderen (cronjob + opstarthook)"
-        echo "  e) Afsluiten (terug naar amtm)"
+        printf '  %-38s %s\n' "1) Controle nu uitvoeren"          "9) Controleren op updates"
+        printf '  %-38s %s\n' "2) Verbonden apparaten tonen"      "g) Mail bij update aan/uit (nu: $um)"
+        printf '  %-38s %s\n' "3) Bekende apparaten tonen"        "r) Vorige versie terugzetten"
+        printf '  %-38s %s\n' "4) Log lezen"                      "i) Installeren (cron + opstarthook)"
+        printf '  %-38s %s\n' "5) Testmail versturen"             "u) Verwijderen (cron + opstarthook)"
+        printf '  %-38s %s\n' "6) Alles nu verbonden als bekend"  "e) Afsluiten (terug naar amtm)"
+        printf '  %-38s\n'    "7) Apparaat vergeten"
+        printf '  %-38s\n'    "8) Controle-interval ($INTERVAL min)"
         echo
         printf '  Keuze: '
         read -r choice || break
