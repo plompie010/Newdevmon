@@ -37,9 +37,7 @@ Then start `amtm`, press `p`, and pick `newdevmon.sh`. In the menu choose:
 | Key | Action |
 |-----|--------|
 | `1` | Check for new devices now |
-| `2` | View connected devices (with band and signal) |
-| `3` | Known devices and details |
-| `4` | Forget a device (it will be reported again) |
+| `2` | Devices: list with band and signal, details per device, forget a device |
 | `s` | **S**ettings and maintenance (see below) |
 | `e` | **E**xit |
 
@@ -75,6 +73,9 @@ Open Settings (`s`), press `r`, then delete `/jffs/scripts/newdevmon.sh` and `/j
 - **Update says latest version**: the `VERSION` in the repository must be higher than the installed one.
 
 ## Changelog
+
+### 0.1.9
+- Menu options 2-4 merged into one Devices screen: the list (now with band and signal), details, and forget at the bottom
 
 ### 0.1.8
 - Added a note to the script header that the code was written with the help of Claude AI
