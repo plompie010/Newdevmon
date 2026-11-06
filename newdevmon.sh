@@ -34,7 +34,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 ###############################################################################
 
-VERSION="0.1.4"
+VERSION="0.1.5"
 SCRIPT_NAME="newdevmon"
 SCRIPT_PATH="${NEWDEVMON_SCRIPT_PATH:-/jffs/scripts/newdevmon.sh}"
 DATA_DIR="${NEWDEVMON_DIR:-/jffs/addons/newdevmon}"
@@ -904,6 +904,35 @@ cmd_update_check() {
     rm -f "$TMPBASE".*
 }
 
+# Prints the changelog entries newer than the installed version, taken from
+# README.md in the repository. Prints nothing if the README cannot be fetched.
+show_changelog() {
+    CURL_BIN="curl"
+    [ -x /usr/sbin/curl ] && CURL_BIN="/usr/sbin/curl"
+    u="$(update_url)"
+    ru="${NEWDEVMON_TEST_README_URL:-${u%/*}/README.md}"
+    "$CURL_BIN" -fsSL --max-time 30 "$ru" -o "$TMPBASE.readme" 2>/dev/null || return 0
+    sc=0
+    first=1
+    while IFS= read -r line; do
+        case "$line" in
+            "### "[0-9]*)
+                v="${line#\#\#\# }"
+                if ver_gt "$v" "$VERSION"; then
+                    sc=1
+                    [ "$first" = "1" ] && { echo; echo "What's new:"; first=0; }
+                    echo "  $v"
+                else
+                    sc=0
+                fi ;;
+            "## "*) sc=0 ;;
+            *) [ "$sc" = "1" ] && [ -n "$line" ] && echo "  $line" ;;
+        esac
+    done < "$TMPBASE.readme"
+    [ "$first" = "0" ] && echo
+    return 0
+}
+
 # Checks for a newer version and installs it after confirmation (or with -y).
 cmd_update() {
     UPDATED=0
@@ -919,8 +948,8 @@ cmd_update() {
         return 0
     fi
 
-    changed="$(diff "$SCRIPT_PATH" "$TMPBASE.remote" 2>/dev/null | grep -c '^[<>]')"
-    echo "Update available: $VERSION -> $rv (${changed:-0} lines changed)"
+    echo "Update available: $VERSION -> $rv"
+    show_changelog
     echo "Source: $(update_url)"
     if [ "$1" != "-y" ]; then
         if [ -t 0 ] && [ -t 1 ]; then
