@@ -74,6 +74,11 @@ Open Settings (`s`), press `r`, then delete `/jffs/scripts/newdevmon.sh` and `/j
 
 ## Changelog
 
+### 0.1.10
+- A new device with a private MAC address and the same name as a known device is flagged in the email ("Similar to: ...") and in the detail screen ("Same name as: ...")
+- Link column no longer flips between wired and Wi-Fi: the Wi-Fi entry with a signal value wins
+- Devices that were never online since being added show "never online" instead of "-"
+
 ### 0.1.9
 - Menu options 2-4 merged into one Devices screen: the list (now with band and signal), details, and forget at the bottom
 
