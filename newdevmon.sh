@@ -35,7 +35,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 ###############################################################################
 
-VERSION="0.1.9"
+VERSION="0.1.10"
 SCRIPT_NAME="newdevmon"
 SCRIPT_PATH="${NEWDEVMON_SCRIPT_PATH:-/jffs/scripts/newdevmon.sh}"
 DATA_DIR="${NEWDEVMON_DIR:-/jffs/addons/newdevmon}"
@@ -179,16 +179,17 @@ nmp_info() {
 link_info() {
     [ -r "$CLIENTLIST_FILE" ] || return 1
     tr -d '\r\n' < "$CLIENTLIST_FILE" | awk '
-        function leaf(k, v,   mac, p) {
+        function leaf(k, v,   mac, p, kk) {
             if (depth < 3 || (k != "ip" && k != "rssi")) return
             mac = tolower(stack[depth])
             p = stack[depth - 2] "/" stack[depth - 1]
-            if (!(mac in ent)) {
-                ent[mac] = 1; order[++n] = mac; path[mac] = p
-                band[mac] = stack[depth - 1]; node[mac] = tolower(stack[depth - 2])
+            kk = mac SUBSEP p
+            if (!(mac in ent)) { ent[mac] = 1; order[++n] = mac }
+            if (!(kk in pseen)) {
+                pseen[kk] = 1; np[mac]++; pl[mac, np[mac]] = p
+                bnd[kk] = stack[depth - 1]; nd[kk] = tolower(stack[depth - 2])
             }
-            if (path[mac] != p) return
-            if (k == "ip") ip[mac] = v; else rssi[mac] = v
+            if (k == "ip") ip[kk] = v; else rssi[kk] = v
         }
         {
             s = $0; depth = 0; after = 0; last = ""; key = ""
@@ -216,7 +217,14 @@ link_info() {
         END {
             for (i = 1; i <= n; i++) {
                 m = order[i]
-                if (m ~ /^[0-9a-f:]+$/ && length(m) == 17) print m "|" node[m] "|" band[m] "|" rssi[m] "|" ip[m]
+                if (!(m ~ /^[0-9a-f:]+$/ && length(m) == 17)) continue
+                best = ""; bs = -1
+                for (j = 1; j <= np[m]; j++) {
+                    kk = m SUBSEP pl[m, j]
+                    sc = ((rssi[kk] != "" && rssi[kk] != "0") ? 4 : 0) + ((bnd[kk] !~ /^wired/) ? 2 : 0)
+                    if (sc > bs) { bs = sc; best = kk }
+                }
+                print m "|" nd[best] "|" bnd[best] "|" rssi[best] "|" ip[best]
             }
         }'
 }
@@ -385,6 +393,19 @@ seen_epoch() {
     echo "$e"
 }
 
+# similar_known MAC NAME: known devices (other MAC) with the same name.
+# Helps to recognise a device that returns with a new private MAC address.
+# Generic names are skipped because they match unrelated devices.
+similar_known() {
+    case "$2" in
+        ""|unknown|iPhone|iPad|"MSFT 5.0"|localhost|[Aa]ndroid*) return 0 ;;
+    esac
+    joined_known | awk -F'|' -v m="$1" -v n="$2" -v now="$(date +%s)" "$AWK_FN"'
+        tolower($8) == tolower(n) && $5 != m {
+            printf "%s (%s, %s)\n", $8, $5, ($11 == 1) ? "online now" : (($10 + 0 > 0) ? "last seen " ago($10, now) : "never seen online")
+        }' | head -n 3
+}
+
 # Known devices combined with the last-seen data from RAM.
 # Fields: g|network|ipkey|lineno|mac|first|ip|name|network|last_epoch|online
 joined_known() {
@@ -520,6 +541,10 @@ cmd_run() {
             fi
             echo "IP:         ${ip:-unknown}"
             echo "Network:    $label"
+            if is_random_mac "$mac"; then
+                sim="$(similar_known "$mac" "$name")"
+                [ -n "$sim" ] && printf '%s\n' "$sim" | sed 's/^/Similar to: /'
+            fi
             echo "Seen at:    $seen"
             echo
         } >> "$body"
@@ -615,6 +640,7 @@ cmd_list() {
                     prev = lab
                 }
                 if (f[11] == 1) last = G "online" X
+                else if (f[10] + 0 <= 0) last = "never online"
                 else last = ago(f[10], now)
                 lt = (f[11] == 1 && (f[5] in lk)) ? lk[f[5]] : "-"
                 printf "%-3d %-16s %-15s %-17s %-9s %-10s %s\n", f[4], trunc(f[8], 16), f[7], f[5], lt, substr(f[6], 1, 10), last
@@ -717,6 +743,14 @@ EOF
         [ -n "$av" ]   && printf '  %-15s %s\n' "Vendor:" "$av"
         [ -n "$an" ]   && printf '  %-15s %s\n' "Asus name:" "$an"
         [ "$amlo" = "1" ] && printf '  %-15s %s\n' "MLO:" "yes"
+    fi
+
+    dname="$(joined_known | awk -F'|' -v m="$dmac" '$5 == m { print $8; exit }')"
+    sim="$(similar_known "$dmac" "$dname")"
+    if [ -n "$sim" ]; then
+        echo
+        printf '  %-15s %s\n' "Same name as:" "$(printf '%s\n' "$sim" | head -n 1)"
+        printf '%s\n' "$sim" | tail -n +2 | sed 's/^/                  /'
     fi
 
     if is_random_mac "$dmac"; then
