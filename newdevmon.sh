@@ -35,7 +35,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 ###############################################################################
 
-VERSION="0.1.8"
+VERSION="0.1.9"
 SCRIPT_NAME="newdevmon"
 SCRIPT_PATH="${NEWDEVMON_SCRIPT_PATH:-/jffs/scripts/newdevmon.sh}"
 DATA_DIR="${NEWDEVMON_DIR:-/jffs/addons/newdevmon}"
@@ -594,8 +594,10 @@ cmd_list() {
     fi
     # Grouped by network (main network first), by IP address within a network.
     # The number (#) stays the line number in the file.
+    link_info 2>/dev/null > "$TMPBASE.link" || : > "$TMPBASE.link"
     joined_known | sort -t'|' -k1,1n -k2,2 -k3,3 | awk -F'|' \
         -v now="$(date +%s)" -v G="$C_G" -v D="$C_D" -v B="$C_B" -v X="$C_X" "$AWK_FN"'
+        FILENAME == ARGV[1] { lk[$1] = bandshort($3) ($4 != "" ? " " $4 : ""); next }
         {
             n++; L[n] = $0
             lab = $9; tot[lab]++
@@ -609,45 +611,16 @@ cmd_list() {
                 if (lab != prev) {
                     if (i > 1) print ""
                     printf "%s== %s ==%s  %d devices, %d online\n", B, lab, X, tot[lab], on[lab] + 0
-                    printf "%s%-3s %-16s %-15s %-17s %-10s %s%s\n", D, "#", "Name", "IP", "MAC", "First", "Last seen", X
+                    printf "%s%-3s %-16s %-15s %-17s %-9s %-10s %s%s\n", D, "#", "Name", "IP", "MAC", "Link", "First", "Last seen", X
                     prev = lab
                 }
                 if (f[11] == 1) last = G "online" X
                 else last = ago(f[10], now)
-                printf "%-3d %-16s %-15s %-17s %-10s %s\n", f[4], trunc(f[8], 16), f[7], f[5], substr(f[6], 1, 10), last
+                lt = (f[11] == 1 && (f[5] in lk)) ? lk[f[5]] : "-"
+                printf "%-3d %-16s %-15s %-17s %-9s %-10s %s\n", f[4], trunc(f[8], 16), f[7], f[5], lt, substr(f[6], 1, 10), last
             }
-        }'
-}
-
-cmd_connected() {
-    scan_sorted > "$TMPBASE.scan"
-    if [ ! -s "$TMPBASE.scan" ]; then
-        echo "No connected devices found."
-        rm -f "$TMPBASE".*
-        return
-    fi
-    [ -f "$KNOWN" ] || : > "$KNOWN"
-    link_info 2>/dev/null > "$TMPBASE.link" || : > "$TMPBASE.link"
-    awk -F'|' -v R="$C_R" -v D="$C_D" -v B="$C_B" -v X="$C_X" "$AWK_FN"'
-        FILENAME == ARGV[1] { fs[$1] = substr($2, 1, 10); next }
-        FILENAME == ARGV[2] { lk[$1] = bandshort($3) ($4 != "" ? " " $4 : ""); next }
-        {
-            lab = label($4)
-            if (lab != prev) {
-                if (prev != "") print ""
-                printf "%s== %s ==%s\n", B, lab, X
-                printf "%s%-16s %-15s %-17s %-9s %s%s\n", D, "Name", "IP", "MAC", "Link", "First seen", X
-                prev = lab
-            }
-            if ($1 in fs) st = fs[$1]; else { st = R "NEW" X; nn++ }
-            nm = ($3 == "") ? "unknown" : $3
-            lt = ($1 in lk) ? lk[$1] : "-"
-            printf "%-16s %-15s %-17s %-9s %s\n", trunc(nm, 16), ($2 == "" ? "-" : $2), $1, lt, st
-            n++
-        }
-        END { printf "\n%d devices in the leases/ARP table, %d new\n", n, nn + 0 }
-    ' "$KNOWN" "$TMPBASE.link" "$TMPBASE.scan"
-    rm -f "$TMPBASE".*
+        }' "$TMPBASE.link" -
+    rm -f "$TMPBASE.link"
 }
 
 # resolve_device NR_OR_MAC: returns the MAC address for a number from the list (or the MAC itself).
@@ -1096,14 +1069,15 @@ menu_confirm() {
 }
 
 menu_forget() {
-    cmd_list
-    [ -s "$KNOWN" ] || return
-    printf '\nNumber or MAC address to forget (empty = cancel): '
+    printf '\nNumber or MAC address to forget (Enter = cancel): '
     read -r sel || return
     [ -z "$sel" ] && return
     mac="$(resolve_device "$sel")"
-    [ -z "$mac" ] && { echo "Invalid choice."; return; }
-    cmd_forget "$mac"
+    if [ -z "$mac" ] || ! is_known "$mac"; then echo "Invalid choice."; pause_enter; return; fi
+    if menu_confirm "Forget this device (it will be reported again)?"; then
+        cmd_forget "$mac"
+        pause_enter
+    fi
 }
 
 # Detail screen of one device, with actions.
@@ -1123,16 +1097,19 @@ menu_device_detail() {
     esac
 }
 
-# List of known devices, with a choice for details.
+# List of known devices, with details and forget at the bottom.
 menu_devices() {
     while true; do
         clear 2>/dev/null
         cmd_list
         [ -s "$KNOWN" ] || { pause_enter; return; }
-        printf '\nNumber or MAC address for details (Enter = back): '
+        printf '\n  Number or MAC address = details\n  f) Forget a device\n  Enter) Back\n\n  Choice: '
         read -r sel || return
-        [ -z "$sel" ] && return
-        menu_device_detail "$sel"
+        case "$sel" in
+            "") return ;;
+            f|F) menu_forget ;;
+            *) menu_device_detail "$sel" ;;
+        esac
     done
 }
 
@@ -1228,9 +1205,7 @@ cmd_menu() {
     while true; do
         menu_header
         mi 1 "Check for new devices now"
-        mi 2 "View connected devices"
-        mi 3 "Known devices and details"
-        mi 4 "Forget a device"
+        mi 2 "Devices (list, details, forget)"
         mi s "Settings and maintenance"
         mi e "Exit (back to amtm)"
         echo
@@ -1248,9 +1223,7 @@ cmd_menu() {
                     echo "Check done: $NEW_COUNT new, but the email was not sent (see the log)."
                 fi
                 pause_enter ;;
-            2) cmd_connected; pause_enter ;;
-            3) menu_devices ;;
-            4) menu_forget; pause_enter ;;
+            2) menu_devices ;;
             s|S) menu_settings; [ "$EXIT_MENU" = "1" ] && break ;;
             e|E|q|Q|0) break ;;
             "") ;;
