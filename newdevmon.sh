@@ -35,7 +35,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 ###############################################################################
 
-VERSION="0.1.15"
+VERSION="0.1.16"
 SCRIPT_NAME="newdevmon"
 SCRIPT_PATH="${NEWDEVMON_SCRIPT_PATH:-/jffs/scripts/newdevmon.sh}"
 DATA_DIR="${NEWDEVMON_DIR:-/jffs/addons/newdevmon}"
@@ -1130,8 +1130,8 @@ hdr_line() {
     awk -v t="$1" 'BEGIN { l = length(t); p = int((62 - l) / 2); printf "##%*s%s%*s##\n", p, "", t, 62 - l - p, "" }'
 }
 
-menu_header() {
-    new_screen
+# banner LINE1 LINE2: the boxed ASCII header, used for the menu and the exit screen.
+banner() {
     model="$(nvram get model 2>/dev/null)"
     [ -z "$model" ] && model="router"
     bar="$(printf '%66s' '' | tr ' ' '#')"
@@ -1144,12 +1144,19 @@ menu_header() {
 |_| |_|\___| \_/\_/ \__,_|\___| \_/ |_| |_| |_|\___/|_| |_|
 ART
     hdr_line ""
-    hdr_line "New Device Monitor"
-    hdr_line "v$VERSION on $model"
+    hdr_line "$1"
+    hdr_line "$2"
     hdr_line ""
     hdr_line "https://github.com/$UPDATE_REPO"
     hdr_line ""
     printf '%s%s\n' "$bar" "$C_X"
+}
+
+menu_header() {
+    new_screen
+    model="$(nvram get model 2>/dev/null)"
+    [ -z "$model" ] && model="router"
+    banner "New Device Monitor" "v$VERSION on $model"
     echo
     menu_dashboard
     echo "------------------------------------------------------------------"
@@ -1326,6 +1333,11 @@ cmd_menu() {
         esac
     done
     clear 2>/dev/null
+    printf '\n\n'
+    banner "Thanks for using New Device Monitor" "v$VERSION - see you next time!"
+    printf '\n'
+    # Short pause so the screen is visible before amtm redraws (interactive only).
+    [ -t 1 ] && sleep 2
 }
 
 ###############################################################################
