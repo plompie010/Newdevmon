@@ -41,9 +41,9 @@ Then start `amtm`, press `p`, and pick `newdevmon.sh`. In the menu choose:
 | `s` | **S**ettings and maintenance (see below) |
 | `e` | **E**xit |
 
-Settings submenu: `f` check **f**requency, `n` **n**otify by email about new versions, `m` **m**ark all connected devices as known (no email is sent), `l` read the **l**og, `t` send a **t**est email, `u` **u**pdate, `p` restore the **p**revious version, `i` **i**nstall cron jobs and startup hook, `r` **r**emove them. Press Enter to go back.
+Settings submenu: `f` check **f**requency, `n` **n**otify by email about new versions, `m` **m**ark all connected devices as known (no email is sent), `o` download the vendor list (**o**ui), `l` read the **l**og, `t` send a **t**est email, `u` **u**pdate, `p` restore the **p**revious version, `i` **i**nstall cron jobs and startup hook, `r` **r**emove them. Press Enter to go back.
 
-Command line: `newdevmon.sh [menu|run|cron|install|uninstall|baseline|test|list|detail NR|MAC|debug NR|MAC|log|forget MAC|update-check|update [-y]|rollback]`
+Command line: `newdevmon.sh [menu|run|cron|install|uninstall|baseline|test|list|detail NR|MAC|debug NR|MAC|portscan NR|MAC|oui-update|log|forget MAC|update-check|update [-y]|rollback]`
 
 ## How it works
 
@@ -52,6 +52,11 @@ Command line: `newdevmon.sh [menu|run|cron|install|uninstall|baseline|test|list|
 - "Online" comes from the Asus client list (`/jffs/nmp_cl_json.js`). Without it, everything in the leases/ARP table counts as seen.
 - Band, signal and node come from `/tmp/clientlist.json`. If that file is missing or has a different layout, those fields are simply omitted.
 - Devices with a private/random MAC address (iPhone, Android, Windows) can appear as new after a reset or per network.
+
+## Vendor list and port scan
+
+- The vendor of a device is looked up in a local copy of the IEEE list. Download it once in Settings > `o`. The vendor shown by Asus itself (from its network map) is used as a fallback. Devices with a private/random MAC address have no vendor. Small vendors with their own address block (MA-M and MA-S) are included; a device from a block that is privately registered still shows no vendor.
+- Port scan (device detail > `s`): TCP connect to about 50 common ports using `nc`, a few seconds per device. Only private addresses are scanned. A device that drops packets looks the same as one with closed ports.
 
 ## Limitations
 
@@ -74,6 +79,20 @@ Open Settings (`s`), press `r`, then delete `/jffs/scripts/newdevmon.sh` and `/j
 - **Update says latest version**: the `VERSION` in the repository must be higher than the installed one.
 
 ## Changelog
+
+### 0.1.25
+- The new-device email now includes the vendor (from the vendor list, else from Asus)
+- Fewer flash writes: the known-devices file is no longer touched every minute, and the update flag is only rewritten when it changes
+
+### 0.1.24
+- Vendor list now also includes the IEEE MA-M and MA-S registries (small vendors with their own address block); lookups try the most specific match first
+
+### 0.1.23
+- The vendor list is stored on the USB drive (`/opt/share/newdevmon/`) when Entware is present, so the flash is spared; otherwise on JFFS. An older copy on the flash is removed when the list moves to USB
+
+### 0.1.22
+- Detail screen: vendor from a local IEEE vendor list (download it once with Settings > `o`; about 2 MB, stored on the USB drive under `/opt` when Entware is present, otherwise on JFFS; only written when you press `o`). Private/random addresses have no vendor
+- Detail screen: `s` scans about 50 common TCP ports on the device (private addresses only, needs `nc`); also `portscan NR|MAC` on the command line
 
 ### 0.1.21
 - Devices screen: `c` checks for new devices and refreshes the list
