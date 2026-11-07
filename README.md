@@ -56,7 +56,7 @@ Command line: `newdevmon.sh [menu|run|cron|install|uninstall|baseline|test|list|
 ## Vendor list and port scan
 
 - The vendor of a device is looked up in a local copy of the IEEE list. Download it once in Settings > `o`. The vendor shown by Asus itself (from its network map) is used as a fallback. Devices with a private/random MAC address have no vendor. Small vendors with their own address block (MA-M and MA-S) are included; a device from a block that is privately registered still shows no vendor.
-- Port scan (device detail > `s`): TCP connect to about 50 common ports using `nc`, a few seconds per device. Only private addresses are scanned. A device that drops packets looks the same as one with closed ports.
+- Port scan (device detail > `s`): TCP connect to about 50 common ports using `nmap` (the script offers to install it through Entware if it is missing), a few seconds per device. Only private addresses are scanned. A device that drops packets looks the same as one with closed ports.
 
 ## Limitations
 
@@ -80,6 +80,15 @@ Open Settings (`s`), press `r` and confirm. This removes the cron jobs, the star
 
 ## Changelog
 
+### 0.1.31
+- Port scan now uses only nmap; if it is missing the script offers to install it through Entware (after confirmation). The nc and curl fallbacks were removed
+
+### 0.1.30
+- Port scan: more robust detection of curl (several locations) and optional use of nmap (Entware) when installed
+
+### 0.1.29
+- Port scan falls back to curl when nc is not available on the router
+
 ### 0.1.28
 - Uninstall now also removes the data folder (/jffs/addons/newdevmon: known devices, settings, log)
 
@@ -101,7 +110,7 @@ Open Settings (`s`), press `r` and confirm. This removes the cron jobs, the star
 
 ### 0.1.22
 - Detail screen: vendor from a local IEEE vendor list (download it once with Settings > `o`; about 2 MB, stored on the USB drive under `/opt` when Entware is present, otherwise on JFFS; only written when you press `o`). Private/random addresses have no vendor
-- Detail screen: `s` scans about 50 common TCP ports on the device (private addresses only, needs `nc`); also `portscan NR|MAC` on the command line
+- Detail screen: `s` scans about 50 common TCP ports on the device (private addresses only, needs `nmap`, installable from the script); also `portscan NR|MAC` on the command line
 
 ### 0.1.21
 - Devices screen: `c` checks for new devices and refreshes the list
