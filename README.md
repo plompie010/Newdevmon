@@ -70,7 +70,7 @@ The repository is fixed in the script: `plompie010/Newdevmon` (branch `main`, fi
 
 ## Uninstall
 
-Open Settings (`s`), press `r`, then delete `/jffs/scripts/newdevmon.sh` and `/jffs/addons/newdevmon`.
+Open Settings (`s`), press `r` and confirm. This removes the cron jobs, the startup hook, the vendor list and the data folder `/jffs/addons/newdevmon` (including the known-devices list). Finally delete the script itself: `rm /jffs/scripts/newdevmon.sh`.
 
 ## Troubleshooting
 
@@ -79,6 +79,15 @@ Open Settings (`s`), press `r`, then delete `/jffs/scripts/newdevmon.sh` and `/j
 - **Update says latest version**: the `VERSION` in the repository must be higher than the installed one.
 
 ## Changelog
+
+### 0.1.28
+- Uninstall now also removes the data folder (/jffs/addons/newdevmon: known devices, settings, log)
+
+### 0.1.27
+- Uninstall now also removes the downloaded vendor list and its folder on the USB drive
+
+### 0.1.26
+- Fix: vendor list download failed with HTTP 418; the IEEE server blocks short user agents, so a full browser user agent is now sent
 
 ### 0.1.25
 - The new-device email now includes the vendor (from the vendor list, else from Asus)
