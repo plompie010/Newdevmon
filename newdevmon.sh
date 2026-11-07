@@ -35,7 +35,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 ###############################################################################
 
-VERSION="0.1.28"
+VERSION="0.1.29"
 SCRIPT_NAME="newdevmon"
 SCRIPT_PATH="${NEWDEVMON_SCRIPT_PATH:-/jffs/scripts/newdevmon.sh}"
 DATA_DIR="${NEWDEVMON_DIR:-/jffs/addons/newdevmon}"
@@ -979,6 +979,16 @@ port_name() {
 }
 
 # cmd_portscan NR|MAC: TCP connect scan of common ports on one known device (private addresses only).
+# scan_probe IP PORT: succeeds if the TCP port accepts a connection
+scan_probe() {
+    if [ "$SCAN_METHOD" = "nc" ]; then
+        nc -w 1 "$1" "$2" </dev/null >/dev/null 2>&1
+    else
+        tc="$("$SCAN_CURL" -s -o /dev/null -m 2 --connect-timeout 1 -w '%{time_connect}' "http://$1:$2/" 2>/dev/null </dev/null)"
+        awk -v t="${tc:-0}" 'BEGIN { exit !(t + 0 > 0) }'
+    fi
+}
+
 cmd_portscan() {
     dmac="$(resolve_device "$1")"
     if [ -z "$dmac" ] || ! is_known "$dmac"; then
@@ -990,8 +1000,14 @@ cmd_portscan() {
         10.*|192.168.*|172.1[6-9].*|172.2[0-9].*|172.3[01].*) ;;
         *) echo "No private IP address known for this device; not scanning."; return 1 ;;
     esac
-    if ! command -v nc >/dev/null 2>&1; then
-        echo "The nc command is not available on this router."
+    # Probe method: nc if present, otherwise curl (connection time > 0 means the port accepted the connection)
+    SCAN_CURL="curl"; [ -x /usr/sbin/curl ] && SCAN_CURL="/usr/sbin/curl"
+    if command -v nc >/dev/null 2>&1; then
+        SCAN_METHOD="nc"
+    elif command -v "$SCAN_CURL" >/dev/null 2>&1; then
+        SCAN_METHOD="curl"
+    else
+        echo "Neither nc nor curl is available on this router; cannot scan."
         return 1
     fi
     np=0; for p in $SCAN_PORTS; do np=$((np + 1)); done
@@ -999,7 +1015,7 @@ cmd_portscan() {
     : > "$TMPBASE.open"
     k=0
     for p in $SCAN_PORTS; do
-        ( nc -w 1 "$ip" "$p" </dev/null >/dev/null 2>&1 && echo "$p" >> "$TMPBASE.open" ) &
+        ( scan_probe "$ip" "$p" && echo "$p" >> "$TMPBASE.open" ) &
         k=$((k + 1))
         [ $((k % 12)) -eq 0 ] && wait
     done
