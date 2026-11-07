@@ -35,7 +35,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 ###############################################################################
 
-VERSION="0.1.29"
+VERSION="0.1.31"
 SCRIPT_NAME="newdevmon"
 SCRIPT_PATH="${NEWDEVMON_SCRIPT_PATH:-/jffs/scripts/newdevmon.sh}"
 DATA_DIR="${NEWDEVMON_DIR:-/jffs/addons/newdevmon}"
@@ -979,14 +979,37 @@ port_name() {
 }
 
 # cmd_portscan NR|MAC: TCP connect scan of common ports on one known device (private addresses only).
-# scan_probe IP PORT: succeeds if the TCP port accepts a connection
-scan_probe() {
-    if [ "$SCAN_METHOD" = "nc" ]; then
-        nc -w 1 "$1" "$2" </dev/null >/dev/null 2>&1
-    else
-        tc="$("$SCAN_CURL" -s -o /dev/null -m 2 --connect-timeout 1 -w '%{time_connect}' "http://$1:$2/" 2>/dev/null </dev/null)"
-        awk -v t="${tc:-0}" 'BEGIN { exit !(t + 0 > 0) }'
+# find_nmap: print the path of nmap, if installed
+find_nmap() {
+    for f in /opt/bin/nmap /usr/bin/nmap /usr/sbin/nmap "$(command -v nmap 2>/dev/null)"; do
+        [ -n "$f" ] && [ -x "$f" ] && { echo "$f"; return 0; }
+    done
+    return 1
+}
+
+# ensure_nmap: install nmap through Entware (opkg) after the user agrees
+ensure_nmap() {
+    SCAN_NMAP="$(find_nmap)" && return 0
+    if ! command -v opkg >/dev/null 2>&1 && [ ! -x /opt/bin/opkg ]; then
+        echo "nmap is needed for the port scan, but Entware (opkg) is not installed."
+        echo "Install Entware via amtm, then run: opkg install nmap"
+        return 1
     fi
+    if [ ! -t 0 ]; then
+        echo "nmap is needed for the port scan. Install it with: opkg install nmap"
+        return 1
+    fi
+    echo "The port scan needs nmap, which is not installed."
+    menu_confirm "Install nmap now with Entware (opkg install nmap)?" || return 1
+    OPKG="opkg"; [ -x /opt/bin/opkg ] && OPKG="/opt/bin/opkg"
+    "$OPKG" update >/dev/null 2>&1
+    if "$OPKG" install nmap; then
+        log "nmap installed through Entware (opkg)"
+    else
+        echo "Installing nmap failed."
+        return 1
+    fi
+    SCAN_NMAP="$(find_nmap)" || { echo "nmap was installed but could not be found."; return 1; }
 }
 
 cmd_portscan() {
@@ -1000,26 +1023,13 @@ cmd_portscan() {
         10.*|192.168.*|172.1[6-9].*|172.2[0-9].*|172.3[01].*) ;;
         *) echo "No private IP address known for this device; not scanning."; return 1 ;;
     esac
-    # Probe method: nc if present, otherwise curl (connection time > 0 means the port accepted the connection)
-    SCAN_CURL="curl"; [ -x /usr/sbin/curl ] && SCAN_CURL="/usr/sbin/curl"
-    if command -v nc >/dev/null 2>&1; then
-        SCAN_METHOD="nc"
-    elif command -v "$SCAN_CURL" >/dev/null 2>&1; then
-        SCAN_METHOD="curl"
-    else
-        echo "Neither nc nor curl is available on this router; cannot scan."
-        return 1
-    fi
+    ensure_nmap || return 1
     np=0; for p in $SCAN_PORTS; do np=$((np + 1)); done
     echo "Scanning $ip: $np common TCP ports (takes a few seconds)..."
     : > "$TMPBASE.open"
-    k=0
-    for p in $SCAN_PORTS; do
-        ( scan_probe "$ip" "$p" && echo "$p" >> "$TMPBASE.open" ) &
-        k=$((k + 1))
-        [ $((k % 12)) -eq 0 ] && wait
-    done
-    wait
+    plist="$(echo $SCAN_PORTS | tr ' ' ',')"
+    "$SCAN_NMAP" -Pn -n -T4 --open -p "$plist" "$ip" 2>/dev/null \
+        | awk -F/ '/^[0-9]+\/tcp +open/ { print $1 }' > "$TMPBASE.open"
     echo
     if [ -s "$TMPBASE.open" ]; then
         printf '%s  %-7s %s%s\n' "$C_D" "Port" "Service" "$C_X"
