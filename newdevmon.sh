@@ -16,7 +16,7 @@
 # Updates: once a day the script checks whether the GitHub repository
 # plompie010/Newdevmon contains a newer VERSION. Raise the VERSION number below
 # with every change you push to the repository, otherwise the script will not
-# see the new version as newer.
+# see the new version as update.
 #
 # Copyright (C) 2026 plompie010
 # This code was written with the help of Claude AI (Anthropic).
