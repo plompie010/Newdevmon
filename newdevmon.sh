@@ -35,7 +35,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 ###############################################################################
 
-VERSION="0.1.26"
+VERSION="0.1.28"
 SCRIPT_NAME="newdevmon"
 SCRIPT_PATH="${NEWDEVMON_SCRIPT_PATH:-/jffs/scripts/newdevmon.sh}"
 DATA_DIR="${NEWDEVMON_DIR:-/jffs/addons/newdevmon}"
@@ -1079,7 +1079,12 @@ cmd_uninstall() {
     cru d "$SCRIPT_NAME" 2>/dev/null
     cru d "${SCRIPT_NAME}-update" 2>/dev/null
     [ -f /jffs/scripts/services-start ] && sed -i "/$SCRIPT_NAME/d" /jffs/scripts/services-start
-    log "Cron jobs and startup hook removed. Data remains in $DATA_DIR."
+    # Vendor list (USB and flash copy) and its folder on the USB drive
+    rm -f "$OUI_USB" "$OUI_JFFS"
+    rmdir "$(dirname "$OUI_USB")" 2>/dev/null
+    log "Uninstalled: cron jobs, startup hook, vendor list and data folder $DATA_DIR removed."
+    # Remove the data folder last (log() would recreate it); this also deletes the known-devices list
+    rm -rf "$DATA_DIR"
 }
 
 ###############################################################################
@@ -1522,7 +1527,7 @@ menu_settings() {
         mi u "Update (check and install)"
         mi p "Restore the previous version"
         mi i "Install cron jobs and startup hook"
-        mi r "Remove cron jobs and startup hook"
+        mi r "Remove cron jobs, startup hook and all data"
         printf '  Enter) Back\n'
         echo
         printf '  Choice: '
@@ -1553,7 +1558,7 @@ menu_settings() {
                 [ "$UPDATED" = "1" ] && EXIT_MENU=1 && return ;;
             i|I) cmd_install; pause_enter ;;
             r|R)
-                if menu_confirm "Remove the cron jobs and the startup hook?"; then
+                if menu_confirm "Remove the cron jobs, startup hook, vendor list and ALL data (known devices, settings, log)?"; then
                     cmd_uninstall
                 fi
                 pause_enter ;;
