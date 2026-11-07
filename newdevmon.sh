@@ -35,7 +35,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 ###############################################################################
 
-VERSION="0.1.25"
+VERSION="0.1.26"
 SCRIPT_NAME="newdevmon"
 SCRIPT_PATH="${NEWDEVMON_SCRIPT_PATH:-/jffs/scripts/newdevmon.sh}"
 DATA_DIR="${NEWDEVMON_DIR:-/jffs/addons/newdevmon}"
@@ -53,6 +53,7 @@ TMPBASE="/tmp/${SCRIPT_NAME}.$$"
 OPT_DIR="${NEWDEVMON_OPT_DIR:-/opt}"          # Entware on the USB drive, if present
 OUI_JFFS="$DATA_DIR/oui.txt"                 # vendor list (fallback location): AABBCC|Vendor name
 OUI_USB="$OPT_DIR/share/newdevmon/oui.txt"   # preferred location: on the USB drive
+OUI_UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.79 Safari/537.36"  # IEEE blocks short/unknown user agents (HTTP 418)
 OUI_URL_L="https://standards-oui.ieee.org/oui/oui.csv"      # MA-L (24-bit)
 OUI_URL_M="https://standards-oui.ieee.org/oui28/mam.csv"    # MA-M (28-bit)
 OUI_URL_S="https://standards-oui.ieee.org/oui36/oui36.csv"  # MA-S (36-bit)
@@ -915,7 +916,7 @@ cmd_oui_update() {
     : > "$TMPBASE.ouic"
     for part in L M S; do
         case "$part" in L) url="$OUI_URL_L" ;; M) url="$OUI_URL_M" ;; S) url="$OUI_URL_S" ;; esac
-        if "$CURL_BIN" -fsSL --max-time 120 --retry 2 -A "Mozilla/5.0" "$url" -o "$TMPBASE.csv" 2>"$TMPBASE.ouierr"; then
+        if "$CURL_BIN" -fsSL --max-time 120 --retry 2 -A "$OUI_UA" "$url" -o "$TMPBASE.csv" 2>"$TMPBASE.ouierr"; then
             oui_compact "$TMPBASE.csv" >> "$TMPBASE.ouic"
         elif [ "$part" = "L" ]; then
             log "Vendor list download failed: $(tr '\n' ' ' < "$TMPBASE.ouierr")"
