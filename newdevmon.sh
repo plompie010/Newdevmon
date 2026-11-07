@@ -35,7 +35,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 ###############################################################################
 
-VERSION="0.1.21"
+VERSION="0.1.25"
 SCRIPT_NAME="newdevmon"
 SCRIPT_PATH="${NEWDEVMON_SCRIPT_PATH:-/jffs/scripts/newdevmon.sh}"
 DATA_DIR="${NEWDEVMON_DIR:-/jffs/addons/newdevmon}"
@@ -49,6 +49,14 @@ AMTM_PW_KEY="ditbabot,isoi"                  # key amtm uses for emailpw.enc (se
 LOCKDIR="/tmp/${SCRIPT_NAME}.lock"
 DRY_RUN="${NEWDEVMON_DRY_RUN:-0}"            # 1 = print the email instead of sending it
 TMPBASE="/tmp/${SCRIPT_NAME}.$$"
+
+OPT_DIR="${NEWDEVMON_OPT_DIR:-/opt}"          # Entware on the USB drive, if present
+OUI_JFFS="$DATA_DIR/oui.txt"                 # vendor list (fallback location): AABBCC|Vendor name
+OUI_USB="$OPT_DIR/share/newdevmon/oui.txt"   # preferred location: on the USB drive
+OUI_URL_L="https://standards-oui.ieee.org/oui/oui.csv"      # MA-L (24-bit)
+OUI_URL_M="https://standards-oui.ieee.org/oui28/mam.csv"    # MA-M (28-bit)
+OUI_URL_S="https://standards-oui.ieee.org/oui36/oui36.csv"  # MA-S (36-bit)
+SCAN_PORTS="21 22 23 25 53 80 81 110 111 135 139 143 443 445 465 515 548 554 587 631 873 993 995 1433 1723 1883 2049 3000 3306 3389 5000 5001 5432 5900 5985 8000 8008 8080 8081 8123 8443 8883 9000 9100 32400 49152 62078"
 
 UPDATE_FLAG="$DATA_DIR/update_available"     # contains the number of a newer version, if found
 
@@ -528,7 +536,7 @@ cmd_run() {
     lock || return 0
     trap cleanup EXIT INT TERM
     mkdir -p "$DATA_DIR"
-    touch "$KNOWN"
+    [ -f "$KNOWN" ] || : > "$KNOWN"
 
     scanfile="$TMPBASE.scan"
     pending="$TMPBASE.pending"
@@ -561,6 +569,8 @@ cmd_run() {
             else
                 echo "MAC:        $mac"
             fi
+            vnd="$(vendor_for "$mac")"
+            [ -n "$vnd" ] && echo "Vendor:     $vnd"
             echo "IP:         ${ip:-unknown}"
             echo "Network:    $label"
             if is_random_mac "$mac"; then
@@ -616,7 +626,7 @@ cmd_run() {
 
 cmd_baseline() {
     mkdir -p "$DATA_DIR"
-    touch "$KNOWN"
+    [ -f "$KNOWN" ] || : > "$KNOWN"
     n=0
     scan_sorted > "$TMPBASE.scan"
     update_seen "$TMPBASE.scan"
@@ -776,12 +786,22 @@ EOF
         esac
     fi
 
-    if [ -n "$conn$sig$via$av$an" ]; then
+    vend=""; vsrc=""
+    if ! is_random_mac "$dmac"; then
+        vend="$(oui_lookup "$dmac")"
+        [ -n "$vend" ] && vsrc="IEEE list"
+    fi
+    if [ -z "$vend" ] && [ -n "$av" ]; then vend="$av"; vsrc="Asus"; fi
+    if [ -z "$vend" ] && ! is_random_mac "$dmac" && ! oui_exists; then
+        vend="unknown (download the vendor list: Settings > o)"
+    fi
+
+    if [ -n "$conn$sig$via$vend$an" ]; then
         echo
         [ -n "$conn" ] && printf '  %-15s %s\n' "Connection:" "$conn"
         [ -n "$sig" ]  && printf '  %-15s %s\n' "Signal:" "$sig"
         [ -n "$via" ]  && printf '  %-15s %s\n' "Connected to:" "$via"
-        [ -n "$av" ]   && printf '  %-15s %s\n' "Vendor:" "$av"
+        [ -n "$vend" ] && printf '  %-15s %s%s\n' "Vendor:" "$vend" "${vsrc:+  ($vsrc)}"
         [ -n "$an" ]   && printf '  %-15s %s\n' "Asus name:" "$an"
         [ "$amlo" = "1" ] && printf '  %-15s %s\n' "MLO:" "yes"
     fi
@@ -824,6 +844,177 @@ cmd_debug() {
     echo
     echo "-- Router and node names"
     node_labels
+}
+
+# oui_compact FILE: turns an IEEE registry CSV (MA-L, MA-M or MA-S) into lines
+# "HEXPREFIX|Vendor name" (6, 7 or 9 hex digits). Placeholder entries are dropped.
+oui_compact() {
+    awk '
+        NR == 1 { next }
+        {
+            gsub(/\r/, "")
+            i = index($0, ","); if (i == 0) next
+            rest = substr($0, i + 1)
+            i = index(rest, ","); if (i == 0) next
+            asg = substr(rest, 1, i - 1)
+            name = substr(rest, i + 1)
+            if (asg !~ /^[0-9A-Fa-f]+$/) next
+            if (length(asg) != 6 && length(asg) != 7 && length(asg) != 9) next
+            if (substr(name, 1, 1) == "\"") {
+                name = substr(name, 2)
+                i = index(name, "\",")
+                if (i > 0) name = substr(name, 1, i - 1); else sub(/"$/, "", name)
+                gsub(/""/, "\"", name)
+            } else {
+                i = index(name, ","); if (i > 0) name = substr(name, 1, i - 1)
+            }
+            gsub(/\|/, "/", name)
+            sub(/^[ \t]+/, "", name); sub(/[ \t]+$/, "", name)
+            if (name == "" || name == "IEEE Registration Authority" || name == "Private") next
+            print toupper(asg) "|" name
+        }' "$1"
+}
+
+# oui_path: the vendor list that exists (USB first), nothing if there is none.
+oui_path() {
+    if [ -s "$OUI_USB" ]; then echo "$OUI_USB"
+    elif [ -s "$OUI_JFFS" ]; then echo "$OUI_JFFS"
+    fi
+}
+oui_exists() { [ -n "$(oui_path)" ]; }
+
+# oui_target: where a new vendor list is written: the USB drive (Entware) if usable, else JFFS.
+oui_target() {
+    if [ -d "$OPT_DIR" ] && [ -w "$OPT_DIR" ] && mkdir -p "$OPT_DIR/share/newdevmon" 2>/dev/null; then
+        echo "$OUI_USB"
+    else
+        echo "$OUI_JFFS"
+    fi
+}
+
+# oui_lookup MAC: prints the vendor from the local list (nothing if unknown).
+oui_lookup() {
+    OUI_FILE="$(oui_path)"
+    [ -n "$OUI_FILE" ] || return 0
+    full="$(echo "$1" | tr -d ':' | tr 'a-f' 'A-F')"
+    # Longest match first: MA-S (9 digits), MA-M (7 digits), MA-L (6 digits).
+    for n in 9 7 6; do
+        pfx="$(echo "$full" | cut -c1-$n)"
+        v="$(grep "^${pfx}|" "$OUI_FILE" | head -n 1 | cut -d'|' -f2)"
+        [ -n "$v" ] && { echo "$v"; return 0; }
+    done
+    return 0
+}
+
+# Downloads the IEEE vendor list and stores it compactly (Settings > o).
+cmd_oui_update() {
+    mkdir -p "$DATA_DIR"
+    CURL_BIN="curl"
+    [ -x /usr/sbin/curl ] && CURL_BIN="/usr/sbin/curl"
+    echo "Downloading the IEEE vendor lists (about 6 MB in total)..."
+    : > "$TMPBASE.ouic"
+    for part in L M S; do
+        case "$part" in L) url="$OUI_URL_L" ;; M) url="$OUI_URL_M" ;; S) url="$OUI_URL_S" ;; esac
+        if "$CURL_BIN" -fsSL --max-time 120 --retry 2 -A "Mozilla/5.0" "$url" -o "$TMPBASE.csv" 2>"$TMPBASE.ouierr"; then
+            oui_compact "$TMPBASE.csv" >> "$TMPBASE.ouic"
+        elif [ "$part" = "L" ]; then
+            log "Vendor list download failed: $(tr '\n' ' ' < "$TMPBASE.ouierr")"
+            echo "Download failed (see the log)."
+            rm -f "$TMPBASE".*
+            return 1
+        else
+            echo "Note: the MA-$part list could not be downloaded; small vendors may be missing."
+        fi
+    done
+    n="$(wc -l < "$TMPBASE.ouic")"
+    if [ "$n" -lt 10000 ]; then
+        log "Vendor list looks wrong ($n entries); not used."
+        echo "The downloaded list looks wrong ($n entries); the old list is kept."
+        rm -f "$TMPBASE".*
+        return 1
+    fi
+    target="$(oui_target)"
+    if cp "$TMPBASE.ouic" "$target.new" && mv "$target.new" "$target"; then
+        # Remove an older copy on the flash if the list now lives on the USB drive.
+        [ "$target" = "$OUI_USB" ] && rm -f "$OUI_JFFS"
+        log "Vendor list updated: $n entries, stored in $target."
+        echo "Vendor list updated: $n entries ($(wc -c < "$target") bytes)."
+        echo "Stored in: $target"
+    else
+        rm -f "$target.new"
+        log "Could not write the vendor list to $target."
+        echo "Could not write the vendor list to $target."
+        rm -f "$TMPBASE".*
+        return 1
+    fi
+    rm -f "$TMPBASE".*
+}
+
+# vendor_for MAC: vendor from the local IEEE list, else from the Asus network map.
+# Prints nothing for private/random addresses or when nothing is known.
+vendor_for() {
+    is_random_mac "$1" && return 0
+    v="$(oui_lookup "$1")"
+    if [ -z "$v" ]; then
+        v="$(nmp_info 2>/dev/null | awk -F'|' -v m="$1" '$1 == m { print $3; exit }')"
+    fi
+    [ -n "$v" ] && echo "$v"
+    return 0
+}
+
+# port_name PORT: common service name.
+port_name() {
+    case "$1" in
+        21) echo ftp ;; 22) echo ssh ;; 23) echo telnet ;; 25|465|587) echo smtp ;;
+        53) echo dns ;; 80|81|8000|8008|8080|8081) echo http ;; 110|995) echo pop3 ;;
+        111) echo rpcbind ;; 135) echo msrpc ;; 139|445) echo smb ;; 143|993) echo imap ;;
+        443|8443) echo https ;; 515) echo lpd-printer ;; 548) echo afp ;; 554) echo rtsp ;;
+        631) echo ipp-printer ;; 873) echo rsync ;; 1433) echo mssql ;; 1723) echo pptp ;;
+        1883|8883) echo mqtt ;; 2049) echo nfs ;; 3000) echo web-app ;; 3306) echo mysql ;;
+        3389) echo rdp ;; 5000|5001) echo synology/upnp ;; 5432) echo postgres ;; 5900) echo vnc ;;
+        5985) echo winrm ;; 8123) echo home-assistant ;; 9000) echo web-app ;; 9100) echo jetdirect-printer ;;
+        32400) echo plex ;; 49152) echo upnp ;; 62078) echo ios-lockdown ;; *) echo "" ;;
+    esac
+}
+
+# cmd_portscan NR|MAC: TCP connect scan of common ports on one known device (private addresses only).
+cmd_portscan() {
+    dmac="$(resolve_device "$1")"
+    if [ -z "$dmac" ] || ! is_known "$dmac"; then
+        echo "Device not found: ${1:-(no input)}"
+        return 1
+    fi
+    ip="$(joined_known | awk -F'|' -v m="$dmac" '$5 == m { print $7; exit }')"
+    case "$ip" in
+        10.*|192.168.*|172.1[6-9].*|172.2[0-9].*|172.3[01].*) ;;
+        *) echo "No private IP address known for this device; not scanning."; return 1 ;;
+    esac
+    if ! command -v nc >/dev/null 2>&1; then
+        echo "The nc command is not available on this router."
+        return 1
+    fi
+    np=0; for p in $SCAN_PORTS; do np=$((np + 1)); done
+    echo "Scanning $ip: $np common TCP ports (takes a few seconds)..."
+    : > "$TMPBASE.open"
+    k=0
+    for p in $SCAN_PORTS; do
+        ( nc -w 1 "$ip" "$p" </dev/null >/dev/null 2>&1 && echo "$p" >> "$TMPBASE.open" ) &
+        k=$((k + 1))
+        [ $((k % 12)) -eq 0 ] && wait
+    done
+    wait
+    echo
+    if [ -s "$TMPBASE.open" ]; then
+        printf '%s  %-7s %s%s\n' "$C_D" "Port" "Service" "$C_X"
+        sort -n "$TMPBASE.open" | while read -r p; do
+            printf '  %-7s %s\n' "$p" "$(port_name "$p")"
+        done
+    else
+        echo "No open ports found among the common ports."
+    fi
+    printf '\n  %sTCP only. A device that silently drops packets looks the same as one with closed ports.%s\n' "$C_D" "$C_X"
+    log "Port scan of $dmac ($ip): $(sort -n "$TMPBASE.open" | tr '\n' ' ')"
+    rm -f "$TMPBASE".*
 }
 
 cmd_log() {
@@ -956,7 +1147,7 @@ cmd_update_check() {
     fi
     rv="$(remote_version "$TMPBASE.remote")"
     if ver_gt "$rv" "$VERSION"; then
-        echo "$rv" > "$UPDATE_FLAG"
+        [ "$(cat "$UPDATE_FLAG" 2>/dev/null)" = "$rv" ] || echo "$rv" > "$UPDATE_FLAG"
         echo "New version available: $rv (you have $VERSION)."
         if [ "$(cat "$DATA_DIR/update_notified" 2>/dev/null)" != "$rv" ]; then
             log "New version available: $rv (current $VERSION)."
@@ -1096,7 +1287,7 @@ cmd_status() {
     echo "Known devices:     $(known_count)"
     [ "$DRY_RUN" = "1" ] && echo "Mode:              DRY RUN (nothing is sent)"
     echo
-    echo "Commands: menu | run | cron | install | uninstall | baseline | test | list | detail NR|MAC | debug NR|MAC | log | forget MAC"
+    echo "Commands: menu | run | cron | install | uninstall | baseline | test | list | detail NR|MAC | debug NR|MAC | portscan NR|MAC | oui-update | log | forget MAC"
     echo "          update-check | update [-y] | rollback"
 }
 
@@ -1233,9 +1424,13 @@ menu_device_detail() {
     cmd_detail "$1" || { pause_enter; return; }
     mac="$(resolve_device "$1")"
     echo
-    printf '  f) Forget this device (report it again)    Enter) Back: '
+    printf '  s) Scan common ports\n  f) Forget this device (report it again)\n  Enter) Back\n\n  Choice: '
     read -r act || return
     case "$act" in
+        s|S)
+            echo
+            cmd_portscan "$mac"
+            pause_enter ;;
         f|F)
             if menu_confirm "Forget this device?"; then
                 cmd_forget "$mac"
@@ -1310,9 +1505,17 @@ menu_settings() {
         menu_header
         printf '  %sSettings and maintenance%s\n\n' "$C_B" "$C_X"
         if [ "$UPDATE_MAIL" = "1" ]; then um="on"; else um="off"; fi
+        ouip="$(oui_path)"
+        if [ -n "$ouip" ]; then
+            case "$ouip" in "$OUI_USB") where="USB" ;; *) where="flash" ;; esac
+            oui_state="$(wc -l < "$ouip") entries, on $where"
+        else
+            oui_state="not downloaded"
+        fi
         mi f "Check frequency (now: every $INTERVAL min)"
         mi n "Notify me by email about new versions (now: $um)"
         mi m "Mark all connected devices as known (no email is sent)"
+        mi o "Download the vendor list ($oui_state)"
         mi l "Read the log"
         mi t "Send a test email"
         mi u "Update (check and install)"
@@ -1332,6 +1535,7 @@ menu_settings() {
                     cmd_baseline
                 fi
                 pause_enter ;;
+            o|O) cmd_oui_update; pause_enter ;;
             l|L) cmd_log 40; pause_enter ;;
             t|T)
                 echo "Sending test email..."
@@ -1360,7 +1564,7 @@ menu_settings() {
 
 cmd_menu() {
     mkdir -p "$DATA_DIR"
-    touch "$KNOWN"
+    [ -f "$KNOWN" ] || : > "$KNOWN"
     while true; do
         menu_header
         mi 1 "Check for new devices now"
@@ -1408,6 +1612,8 @@ case "$1" in
     list)      cmd_list ;;
     detail)    cmd_detail "$2" ;;
     debug)     cmd_debug "$2" ;;
+    portscan)  cmd_portscan "$2" ;;
+    oui-update) cmd_oui_update ;;
     log)       cmd_log "$2" ;;
     forget)    cmd_forget "$2" ;;
     install)   cmd_install ;;
